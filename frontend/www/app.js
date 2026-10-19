@@ -4,7 +4,6 @@ const fileInput = document.querySelector("#file");
 const drop = document.querySelector("#drop");
 const dropTitle = document.querySelector("#dropTitle");
 const submitBtn = document.querySelector("#submit");
-const sampleBtn = document.querySelector("#sample");
 const resultEl = document.querySelector("#result");
 const resultTitle = document.querySelector("#resultTitle");
 const countsEl = document.querySelector("#counts");
@@ -32,7 +31,6 @@ function formatDuration(total) {
 
 function setBusy(busy) {
   submitBtn.disabled = busy;
-  sampleBtn.disabled = busy;
   if (!busy) {
     submitBtn.textContent = "生成结构模型";
     stopProgress();
@@ -244,19 +242,6 @@ form.addEventListener("submit", async (event) => {
   await run("/api/build", { method: "POST", body });
 });
 
-sampleBtn.addEventListener("click", async () => {
-  clearError();
-  const payload = {
-    story: Number(document.querySelector("#story").value),
-    slab: Number(document.querySelector("#slab").value)
-  };
-  await run("/api/build-sample", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-});
-
 async function readEvents(response) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -316,7 +301,6 @@ async function refreshStatus() {
     statusEl.querySelector('[data-key="zwcad"]').className = data.zwcad ? "ok" : "bad";
     statusEl.querySelector('[data-key="sketchup"]').className = data.sketchup ? "ok" : "bad";
     statusEl.querySelector('[data-key="rhino"]').className = data.rhino ? "ok" : "bad";
-    sampleBtn.hidden = !data.sample;
   } catch {
     statusEl.querySelectorAll("span").forEach((node) => { node.className = "bad"; });
   }

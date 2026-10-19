@@ -21,9 +21,7 @@
 | `rhino\bridge.py` | Rhino 进程内的监听桥，听 `127.0.0.1:2000` |
 | `sketchup\su_mcp\` | SketchUp MCP 插件 |
 | `sketchup\boot_sketchup_mcp.rb` | 在已打开的 SketchUp 里加载插件并开始监听 |
-| `www` | 直接打开建模电脑时使用的页面，内容和 `frontend\www` 保持一致 |
 | `jobs\<id>\` | 一次任务的 DWG、`floor.json`、`model.skp`、`model.3dm`。运行时生成 |
-| `sample.dwg` | 可选。放在 `backend` 目录后，页面会出现「使用示例图纸」 |
 
 含中文的 `.ps1` 必须保存为 **UTF-8 带 BOM**。Windows PowerShell 5.1 否则会按系统 ANSI 代码页解析，中文引号会被拆开，整份脚本报语法错误。`lib\Send-Rhino.ps1` 的源码是英文，中文提示在运行时拼出来。
 
@@ -45,7 +43,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -STA -File .\server.ps1
 netsh http add urlacl url=http://+:8780/ user=Everyone
 ```
 
-然后 `Ctrl+C` 停掉正在重试的窗口，再执行上面的启动命令。看到 `listening http://+:8780/` 后，本机打开 http://127.0.0.1:8780/api/status 。`zwcad`、`sketchup`、`rhino` 为 `true` 才算三个软件都连上。其它电脑用这台机器的局域网 IP 访问 `8780`。防火墙只对网页服务器放行 `8780`。
+然后 `Ctrl+C` 停掉正在重试的窗口，再执行上面的启动命令。看到 `listening http://+:8780/` 后，本机打开 http://127.0.0.1:8780/api/status 。`zwcad`、`sketchup`、`rhino` 为 `true` 才算三个软件都连上。后端只提供 `/api/*`，页面由前端服务器提供；前端服务器用这台机器的局域网 IP 访问 `8780`，防火墙只对它放行 `8780`。
 
 ## 三个软件
 
@@ -108,7 +106,7 @@ DeepSeek 第一次请求开启思考模式。没有返回完整 JSON 时，关�
 
 ## 进度
 
-`/api/build` 和 `/api/build-sample` 返回 `application/x-ndjson`。每一行是一个 JSON 对象：
+`/api/build` 返回 `application/x-ndjson`。每一行是一个 JSON 对象：
 
 | 字段 | 含义 |
 |---|---|

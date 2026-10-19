@@ -146,7 +146,6 @@ button, .download {
 }
 button:hover, .download:hover { background: var(--teal-dark); }
 button:disabled { opacity: 0.55; cursor: wait; }
-#sample { background: #314052; }
 
 .progress {
   margin-top: 14px;

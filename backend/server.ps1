@@ -95,7 +95,6 @@ if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne "STA") {
 }
 
 $Jobs = Join-Path $Root "jobs"
-$Sample = Join-Path $Root "sample.dwg"
 New-Item -ItemType Directory -Force -Path $Jobs | Out-Null
 . (Join-Path $Root "lib\Extract-DwgStructure.ps1")
 . (Join-Path $Root "lib\Send-SketchUp.ps1")
@@ -720,20 +719,7 @@ try {
           zwcad = $zw
           sketchup = $su
           rhino = $rhino
-          sample = (Test-Path -LiteralPath $Sample)
         }
-      } elseif ($req.HttpMethod -eq "POST" -and $path -eq "/api/build-sample") {
-        if (-not (Test-Path -LiteralPath $Sample)) { throw "项目里没有示例图纸" }
-        $body = [System.Text.Encoding]::UTF8.GetString((Read-RequestBytes $req))
-        $story = 3000.0
-        $slab = 130.0
-        if ($body) {
-          $parsed = $body | ConvertFrom-Json
-          if ($parsed.story) { $story = [double]$parsed.story }
-          if ($parsed.slab) { $slab = [double]$parsed.slab }
-        }
-        $bytes = [System.IO.File]::ReadAllBytes($Sample)
-        Start-BuildRequest -Context $ctx -Bytes $bytes -Name ([System.IO.Path]::GetFileName($Sample)) -Story $story -Slab $slab
       } elseif ($req.HttpMethod -eq "POST" -and $path -eq "/api/build") {
         $bytes = Read-RequestBytes $req
         $parts = Parse-Multipart $bytes $req.ContentType
