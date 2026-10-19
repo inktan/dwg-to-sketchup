@@ -1,0 +1,10 @@
+.env
+**/.env
+jobs/
+backend/jobs/
+backend/ruby/job.txt
+backend/sketchup-mcp-status.txt
+*.skp
+*.3dm
+*.dwg
+*.blend

@@ -1,0 +1,44 @@
+# DWG 结构模型
+
+把一张结构施工图 DWG 读成梁、柱、墙和楼板，生成 SketchUp 模型（`.skp`）和 Rhino 模型（`.3dm`）。图元和默认图层规则交给 DeepSeek 分析。整张图对不上预定规则时，由 DeepSeek 按结构布置是否合理自行判断。
+
+仓库必须放在 `C:\set\dwg-to-sketchup`。SketchUp 和 Rhino 的建模脚本写死了这个路径。
+
+## 两台电脑
+
+| 目录 | 跑在哪台电脑 | 作用 |
+|---|---|---|
+| `frontend` | 网页服务器 | 只提供页面，并把 `/api` 转到建模电脑 |
+| `backend` | 开着中望 CAD、SketchUp、Rhino 的电脑 | 读 DWG、调用 DeepSeek、往两个软件里建模 |
+
+浏览器只访问网页服务器。SketchUp 的 `127.0.0.1:9876` 和 Rhino 的 `127.0.0.1:2000` 不开放到局域网。中望 CAD 也只接受本机 COM。建模电脑对外只开放 `8780`。
+
+```text
+浏览器
+  └─ 网页服务器  frontend\web.ps1
+       └─ 建模电脑  backend\server.ps1 :8780
+            ├─ 中望 CAD（本机 COM）
+            ├─ DeepSeek API
+            ├─ SketchUp  127.0.0.1:9876
+            └─ Rhino     127.0.0.1:2000
+```
+
+开发说明：
+
+- 网页端：[frontend/README.md](frontend/README.md)
+- 建模端：[backend/README.md](backend/README.md)
+
+## 一次建模做了什么
+
+1. 网页把 DWG、层高、板厚发给建模电脑。
+2. 中望 CAD 读出直线、多线、多段线、圆、文字、图块和图层。
+3. 图元清单和默认梁、柱、墙、楼板规则一起发给 DeepSeek。
+4. DeepSeek 返回构件编号和截面。程序按编号还原坐标，写成 `floor.json`。
+5. SketchUp 执行 `backend\ruby\build.rb`，保存 `model.skp`。
+6. Rhino 已在监听时，执行 `backend\rhino\build.py`，保存 `model.3dm`。Rhino 没连上时，这一步记为跳过，SketchUp 模型仍然可用。
+
+每次上传都重新读图、重新建模，不按文件指纹跳过。
+
+## 不要提交的文件
+
+`.env` 里有 DeepSeek 密钥，已被 `.gitignore` 排除。任务目录 `backend\jobs`、生成的 `skp` / `3dm` / `dwg` 也不进仓库。新环境复制 `backend\.env.example` 为 `backend\.env`，再填入密钥。
