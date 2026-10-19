@@ -15,13 +15,20 @@
 
 ```text
 浏览器
-  └─ 网页服务器  frontend\web.ps1
+  └─ 网页服务器  frontend\server.js
        └─ 建模电脑  backend\server.ps1 :8780
             ├─ 中望 CAD（本机 COM）
             ├─ DeepSeek API
             ├─ SketchUp  127.0.0.1:9876
             └─ Rhino     127.0.0.1:2000
 ```
+
+## 运行时
+
+网页端用 Node.js，建模端用 Windows PowerShell 5.1。两边的运行时按各自要调用的东西来定，不要对调。
+
+- 网页机不打开中望 CAD、SketchUp、Rhino。`frontend\server.js` 只提供页面，并把 `/api` 转到建模电脑。Node 按 UTF-8 读脚本，用普通套接字监听端口。Windows PowerShell 5.1 会把没有 BOM 的脚本按系统 ANSI 代码页解析（中文系统是 GB2312），汉字的尾字节会吃掉后面的引号，脚本报「字符串缺少终止符」。Node 也不走 HTTP.sys，网页端不需要 `netsh http add urlacl`。
+- 建模端留在 PowerShell。中望 CAD 通过本机 COM 连接，这个 COM 只能在单线程套间里调用，所以 `backend\server.ps1` 必须用 `powershell -STA` 启动。含中文的 `.ps1` 保存为 UTF-8 带 BOM。
 
 开发说明：
 

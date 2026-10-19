@@ -2,6 +2,8 @@
 
 建模电脑上的程序。中望 CAD、SketchUp、Rhino 和这个目录必须在同一台已登录的桌面上。不要把它做成 Windows 服务：这三个软件都要在交互桌面里开着。
 
+这个目录保持 Windows PowerShell，不改成 Node.js。中望 CAD 通过本机 COM 连接，这个 COM 只能在 PowerShell 的单线程套间里调用。网页在另一台电脑上，由 `frontend\server.js` 提供，再把 `/api` 转到这里。
+
 把仓库克隆到本机任意目录。服务、SketchUp 和 Rhino 都从 `backend` 这个文件夹往下找文件。
 
 ## 文件

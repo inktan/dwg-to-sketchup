@@ -8,3 +8,4 @@ backend/sketchup-mcp-status.txt
 *.3dm
 *.dwg
 *.blend
+node_modules/

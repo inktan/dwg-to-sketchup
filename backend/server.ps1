@@ -1,8 +1,8 @@
 ﻿# Backend on the CAD computer: read DWG, ask DeepSeek, build SketchUp and Rhino models.
-# The web computer runs frontend\web.ps1 and forwards /api here.
+# The web computer runs frontend\server.js and forwards /api here.
 # Foreground, reloads when server.ps1 or lib\*.ps1 changes:
 #   powershell -NoProfile -ExecutionPolicy Bypass -STA -File server.ps1
-# Serves /api/* only. Pages come from the web computer running frontend\web.ps1.
+# Serves /api/* only. Pages come from the web computer running frontend\server.js.
 
 param([switch]$Child)
 
