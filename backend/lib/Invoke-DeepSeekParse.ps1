@@ -457,8 +457,11 @@ function Invoke-DeepSeekStructure {
   param($Inventory, $Index, $SpaceBoxes, [string]$ApiKey, [double]$Story, [double]$SlabThick, [scriptblock]$OnProgress)
   $entityCount = 0
   $layerCount = 0
-  try { $entityCount = @($Inventory.entities).Count } catch {}
-  try { $layerCount = @($Inventory.layers).Count } catch {}
+  # 这里不能用 @() 包一层取 Count：PS 5.1 对 List[object] 这样取会抛
+  # "Argument types do not match"，异常被吞掉后图元数就显示成 0。
+  # List 和数组都有 .Count，直接取。
+  try { $entityCount = [int]$Inventory.entities.Count } catch {}
+  try { $layerCount = [int]$Inventory.layers.Count } catch {}
   if ($OnProgress) {
     & $OnProgress "打包图元" "已从 CAD 读出 $entityCount 个图元、$layerCount 个图层。正在把图元清单和默认梁柱墙板规则打包成同一次分析请求。"
   }
