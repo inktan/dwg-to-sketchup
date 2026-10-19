@@ -189,13 +189,15 @@ function Get-PointPathLength {
 function Get-StructureRuleText {
   @'
 默认结构规则（先判断整张图是否符合这些预定规则。图层名不区分大小写。符合时按规则归类。整张图的图层、图块和标注都对不上这些规则时，不要套用图层名，改为按结构设计是否合理自行判断）：
-- 梁图层：s数字-beam，或 s数字-beam-hddn。图元是 mline、line，或 polyline。平行双线方向点积绝对值不小于 0.99、重叠不少于 50 mm、间距 80 到 1010 mm 时，较短线向另一条偏移一半间距得到梁中线，间距就是梁宽。梁高取中线附近 2500 mm 内的尺寸文字，格式为 N x N、N*N 或 N×N；对不上时梁高用 500。梁尺寸文字图层：以 dsptext_beam 结尾、以 dsptext_wallbeam 结尾、G-ANNO-NPLT、尺寸标注数字-梁。
+- 梁图层：s数字-beam，或 s数字-beam-hddn；图层名里含 gl 或 GL（不区分大小写，例如 s1-beam-gl、GL-1）的线状图元也算梁，而且这条梁是钢梁。图元是 mline、line，或 polyline。平行双线方向点积绝对值不小于 0.99、重叠不少于 50 mm、间距 80 到 1010 mm 时，较短线向另一条偏移一半间距得到梁中线，间距就是梁宽。梁高取中线附近 2500 mm 内的尺寸文字，格式为 N x N、N*N 或 N×N；对不上时梁高用 500。梁尺寸文字图层：以 dsptext_beam 结尾、以 dsptext_wallbeam 结尾、G-ANNO-NPLT、尺寸标注数字-梁。
+- 钢梁尺寸文字：由四个数字组成的型钢规格字符串，例如 400x200x8x13、HN400*200*8*13、400×200×8×13。它同样是梁的截面尺寸，不要当成标注、轴号或其它图元。第 1 个数字是截面高（depth），第 2 个是截面宽（width），后面两个是腹板厚和翼缘厚，不用管。这种文字出现在哪条梁中线附近，那条梁就是钢梁。
 - 柱图层：a数字-cols 或 s数字-cols，数字可以没有，例如 S-COLS。闭合 polyline 面积在 10000 到 10000000 之间，以及圆。不要把轴号小圆当成柱。
 - 墙图层：a数字-wall 或 s数字-wall。平行双线间距 80 到 1000 mm、重叠不少于 50 mm。墙厚通常小于 450，长度通常大于 1500。不要把整层外轮廓或轴线当成墙。
 - 楼板图层：a数字-slab-otln、s数字-slab-otln、a数字-flor-otln、s数字-flor-otln 的闭合 polyline，面积不小于 1000000。板厚文字图层 s数字-slab-text，板厚取 40 到 800。没有板轮廓时，slabRect 用所选梁柱墙的包围盒。
 - id 必须来自输入，禁止编造 id 或坐标。
 - 梁、柱、墙必须在同一坐标空间。图块定义是局部坐标，模型空间可能是另一套大坐标。若梁图块和柱墙图块的范围接近，就只选这些图块里的 id，不要再选模型空间里平移后的副本。
-- 梁的 width 是梁宽，depth 是梁高，单位毫米。附近文字 200x500 表示宽x高；( +0.020 ) 表示 rise 为 20。没有标注时，mline 的 scale 可作为 width，depth 用 500。
+- 梁的 width 是梁宽，depth 是梁高，单位毫米。附近文字是两个数字时，200x500 表示宽 x 高；是四个数字的型钢规格时，400x200x8x13 表示高 400、宽 200，也就是 depth 取第 1 个数字、width 取第 2 个数字。( +0.020 ) 表示 rise 为 20。没有标注时，mline 的 scale 可作为 width，depth 用 500。
+- 钢梁要在 beams 项里加 "steel":true。图层名含 gl 或 GL 的梁一定是钢梁；梁中线附近有四个数字型钢规格文字的梁也是钢梁。其它梁加 "steel":false。
 - storyMm 和 slabThickMm 采用用户给出的默认值，除非文字明确只给出一个标准层高或板厚。
 - 不要选择尺寸线、轴号、填充边界、图框和标题栏。
 整张图完全不符合上面的预定规则时，必须自行判断，并思考这套结构是否合理：
@@ -212,7 +214,7 @@ function New-DeepSeekBody {
   $system = @"
 你是结构施工图解析器。每次请求都会同时给你两份材料：中望 CAD 读出的全部图元清单，以及下面这套默认结构规则。图纸符合规则时按规则归类。图纸整体不符合预定规则时，不要硬套图层名，要自行判断哪些图元是梁、柱、墙、楼板，并思考这样的结构布置是否合理。id 仍然只能来自清单。
 只输出一个 JSON 对象，不要 Markdown，不要解释。格式：
-{"summary":"一两句中文，说明依据","storyMm":3000,"slabThickMm":130,"beams":[{"id":"m1","width":200,"depth":500,"rise":0}],"columns":[{"id":"p1"}],"walls":[{"id":"p2"}],"slabRect":[0,0,1000,1000]}
+{"summary":"一两句中文，说明依据","storyMm":3000,"slabThickMm":130,"beams":[{"id":"m1","width":200,"depth":500,"rise":0,"steel":false}],"columns":[{"id":"p1"}],"walls":[{"id":"p2"}],"slabRect":[0,0,1000,1000]}
 $rules
 "@
   $user = "请把下面的 CAD 图元和默认规则放在一起分析，并输出 JSON。先看整张图是否符合预定规则。符合就按规则归类；完全不符合时，请自行判断梁、柱、墙、楼板，并思考结构布置是否合理。用户指定的默认层高是 $Story mm，默认板厚是 $SlabThick mm。`n`n" + $rules + "`n`n图元 JSON：`n" + $InventoryJson
@@ -346,8 +348,15 @@ function Convert-StructurePlan {
       if ($depth -lt 150 -or $depth -gt 2500) { $depth = 500 }
       $rise = Convert-ToDouble (Get-PlanProp $sel.Raw @("rise")) 0
       if ($rise -lt -2000 -or $rise -gt 5000) { $rise = 0 }
+      $steel = $false
+      if ($local.layer -and ([string]$local.layer -match 'gl')) { $steel = $true }
+      $steelRaw = Get-PlanProp $sel.Raw @("steel", "isSteel", "is_steel")
+      if ($null -ne $steelRaw) {
+        if ($steelRaw -eq $true) { $steel = $true }
+        elseif (([string]$steelRaw).Trim().ToLowerInvariant() -eq 'true' -or ([string]$steelRaw).Trim() -eq '1') { $steel = $true }
+      }
       $len = [math]::Round((Get-PointPathLength $pts), 1)
-      $beams.Add(@{ pts = $pts; w = [math]::Round($width, 1); h = [math]::Round($depth, 1); rise = [math]::Round($rise, 1); len = $len }) | Out-Null
+      $beams.Add(@{ pts = $pts; w = [math]::Round($width, 1); h = [math]::Round($depth, 1); rise = [math]::Round($rise, 1); len = $len; steel = $steel }) | Out-Null
       for ($pi = 0; $pi -lt $pts.Count; $pi++) {
         $p = $pts[$pi]
         if ([double]$p[0] -lt $minX) { $minX = [double]$p[0] }

@@ -93,6 +93,50 @@ def beam_brep(x1, y1, x2, y2, width, depth, z_top):
     return box.ToBrep()
 
 
+def steel_beam_brep(x1, y1, x2, y2, width, depth, z_top):
+    dx = x2 - x1
+    dy = y2 - y1
+    length = math.sqrt(dx * dx + dy * dy)
+    if length < 50.0 or width <= 1.0 or depth <= 1.0:
+        return None
+    side = Rhino.Geometry.Vector3d(-dy, dx, 0.0)
+    if not side.Unitize():
+        return None
+    # 截面所在平面：原点在梁起点、顶面标高，局部 x 轴垂直于梁轴，局部 y 轴竖直向上，
+    # 因此平面法向正好等于梁轴方向，可直接沿法向拉伸。
+    plane = Rhino.Geometry.Plane(
+        Rhino.Geometry.Point3d(x1, y1, z_top), side, Rhino.Geometry.Vector3d.ZAxis
+    )
+    hw = width / 2.0
+    tw = max(depth * 0.02, 5.0) / 2.0
+    tf = min(max(depth * 0.04, 6.0), depth * 0.4)
+    outline = [
+        (-hw, 0.0),
+        (-hw, -tf),
+        (-tw, -tf),
+        (-tw, -(depth - tf)),
+        (-hw, -(depth - tf)),
+        (-hw, -depth),
+        (hw, -depth),
+        (hw, -(depth - tf)),
+        (tw, -(depth - tf)),
+        (tw, -tf),
+        (hw, -tf),
+        (hw, 0.0),
+    ]
+    pline = Rhino.Geometry.Polyline()
+    for u, v in outline:
+        pline.Add(plane.PointAt(u, v))
+    pline.Add(plane.PointAt(outline[0][0], outline[0][1]))
+    curve = pline.ToPolylineCurve()
+    if curve.ClosedCurveOrientation(plane.ZAxis) == Rhino.Geometry.CurveOrientation.Clockwise:
+        curve.Reverse()
+    extrusion = Rhino.Geometry.Extrusion.Create(curve, length, True)
+    if extrusion is None:
+        return None
+    return extrusion.ToBrep()
+
+
 def ring_brep(pts, z0, height):
     ring = clean_ring(pts)
     if len(ring) < 3 or height <= 1.0:
@@ -133,6 +177,7 @@ def main():
     delete_previous(doc)
 
     beam_rgb = [79, 109, 122]
+    steel_rgb = [146, 152, 160]
     col_rgb = [90, 94, 99]
     wall_rgb = [196, 184, 166]
     slab_rgb = [168, 196, 188]
@@ -145,13 +190,18 @@ def main():
         width = float(beam.get("w") or 200)
         depth = float(beam.get("h") or 500)
         rise = float(beam.get("rise") or 0)
+        steel = beam.get("steel") is True
         z_top = story + rise
         for i in range(len(pts) - 1):
-            brep = beam_brep(float(pts[i][0]), float(pts[i][1]), float(pts[i + 1][0]), float(pts[i + 1][1]), width, depth, z_top)
+            args = (float(pts[i][0]), float(pts[i][1]), float(pts[i + 1][0]), float(pts[i + 1][1]), width, depth, z_top)
+            brep = steel_beam_brep(*args) if steel else beam_brep(*args)
             if brep is None:
                 continue
             beam_n += 1
-            add_solid(doc, file3dm, brep, "StruBeam_%03d" % beam_n, beam_rgb, u"结构-梁", scale)
+            if steel:
+                add_solid(doc, file3dm, brep, "StruSteelBeam_%03d" % beam_n, steel_rgb, u"结构-钢梁", scale)
+            else:
+                add_solid(doc, file3dm, brep, "StruBeam_%03d" % beam_n, beam_rgb, u"结构-梁", scale)
 
     for col in data.get("columns") or []:
         brep = None

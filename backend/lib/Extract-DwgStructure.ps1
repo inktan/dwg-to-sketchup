@@ -111,7 +111,7 @@ function ConvertTo-InventoryNum {
 
 function Get-TextRank {
   param([string]$Text)
-  if ($Text -match '\d+\s*[xX×*]\s*\d+') { return 0 }
+  if ($Text -match '(?:H|HN|HW|HM|I)?\d+\s*[xX×*]\s*\d+(\s*[xX×*]\s*\d+)*') { return 0 }
   if ($Text -match '梁|柱|墙|板|层高|标高|KL|LL|剪力墙|板厚') { return 1 }
   return 2
 }
@@ -251,7 +251,7 @@ function Read-CadContainer {
       $pub["bbox"] = @((ConvertTo-InventoryNum $box[0]), (ConvertTo-InventoryNum $box[1]), (ConvertTo-InventoryNum $box[2]), (ConvertTo-InventoryNum $box[3]))
     }
     Add-CadPublic $Bag "m" $pub @{
-      type = "mline"; space = $SpaceName; pts = $item.pts; scale = $item.scale; closed = $false
+      type = "mline"; space = $SpaceName; pts = $item.pts; scale = $item.scale; closed = $false; layer = $item.layer
     } | Out-Null
     $kept.mline++
   }
@@ -268,7 +268,7 @@ function Read-CadContainer {
       bbox = @((ConvertTo-InventoryNum $box[0]), (ConvertTo-InventoryNum $box[1]), (ConvertTo-InventoryNum $box[2]), (ConvertTo-InventoryNum $box[3]))
     } @{
       type = "polyline"; space = $SpaceName; pts = $item.pts; closed = $true
-      area = $item.area; thick = $item.thick; length = $item.len
+      area = $item.area; thick = $item.thick; length = $item.len; layer = $item.layer
     } | Out-Null
     $kept.polyline++
   }
@@ -283,7 +283,7 @@ function Read-CadContainer {
     if ($item.pts.Count -le 6) { $pub["pts"] = Copy-PointList $item.pts }
     else { $pub["bbox"] = @((ConvertTo-InventoryNum $box[0]), (ConvertTo-InventoryNum $box[1]), (ConvertTo-InventoryNum $box[2]), (ConvertTo-InventoryNum $box[3])) }
     Add-CadPublic $Bag "p" $pub @{
-      type = "polyline"; space = $SpaceName; pts = $item.pts; closed = $false; scale = 0
+      type = "polyline"; space = $SpaceName; pts = $item.pts; closed = $false; scale = 0; layer = $item.layer
     } | Out-Null
     $kept.polyline++
   }
@@ -299,7 +299,7 @@ function Read-CadContainer {
       a = @((ConvertTo-InventoryNum $item.a[0]), (ConvertTo-InventoryNum $item.a[1]))
       b = @((ConvertTo-InventoryNum $item.b[0]), (ConvertTo-InventoryNum $item.b[1]))
     } @{
-      type = "line"; space = $SpaceName; pts = $pts; closed = $false; scale = 0
+      type = "line"; space = $SpaceName; pts = $pts; closed = $false; scale = 0; layer = $item.layer
     } | Out-Null
     $kept.line++
   }

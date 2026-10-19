@@ -49,6 +49,29 @@ def extrude_ring(entities, pts, z0_mm, height_mm)
   true
 end
 
+# 在 x = 0 平面上生成工字形钢梁截面（顶部在 z = 0，沿 -z 向下）。
+def add_steel_face(entities, width, depth)
+  return nil if width <= 1.0 || depth <= 1.0
+  hw = width.mm / 2.0
+  tw = [depth * 0.02, 5.0].max.mm / 2.0
+  tf = [[depth * 0.04, 6.0].max, depth * 0.4].min.mm
+  d = depth.mm
+  entities.add_face(
+    Geom::Point3d.new(0, -hw, 0),
+    Geom::Point3d.new(0, -hw, -tf),
+    Geom::Point3d.new(0, -tw, -tf),
+    Geom::Point3d.new(0, -tw, -(d - tf)),
+    Geom::Point3d.new(0, -hw, -(d - tf)),
+    Geom::Point3d.new(0, -hw, -d),
+    Geom::Point3d.new(0, hw, -d),
+    Geom::Point3d.new(0, hw, -(d - tf)),
+    Geom::Point3d.new(0, tw, -(d - tf)),
+    Geom::Point3d.new(0, tw, -tf),
+    Geom::Point3d.new(0, hw, -tf),
+    Geom::Point3d.new(0, hw, 0)
+  )
+end
+
 job = File.read(JOB_FILE, encoding: 'UTF-8').strip.tr('\\', '/')
 data_path = File.join(job, 'floor.json')
 result_path = File.join(job, 'build_result.json')
@@ -75,7 +98,9 @@ begin
   layer_col = tag_for(model, '结构-柱')
   layer_wall = tag_for(model, '结构-墙')
   layer_slab = tag_for(model, '结构-楼板')
+  layer_steel = tag_for(model, '结构-钢梁')
   mat_beam = material_for(model, '梁-混凝土', [79, 109, 122], 1.0)
+  mat_steel = material_for(model, '梁-钢', [146, 152, 160], 1.0)
   mat_col = material_for(model, '柱-混凝土', [90, 94, 99], 1.0)
   mat_wall = material_for(model, '墙-混凝土', [196, 184, 166], 1.0)
   mat_slab = material_for(model, '楼板-混凝土', [168, 196, 188], 0.55)
@@ -108,26 +133,42 @@ begin
       len = Math.hypot(x2 - x1, y2 - y1)
       next if len < 50.0
       g = beams_g.entities.add_group
+      steel = beam['steel'] == true
       hw = width.mm / 2.0
-      face = g.entities.add_face(
-        Geom::Point3d.new(0, -hw, -depth.mm),
-        Geom::Point3d.new(len.mm, -hw, -depth.mm),
-        Geom::Point3d.new(len.mm, hw, -depth.mm),
-        Geom::Point3d.new(0, hw, -depth.mm)
-      )
+      if steel
+        face = add_steel_face(g.entities, width, depth)
+      else
+        face = g.entities.add_face(
+          Geom::Point3d.new(0, -hw, -depth.mm),
+          Geom::Point3d.new(len.mm, -hw, -depth.mm),
+          Geom::Point3d.new(len.mm, hw, -depth.mm),
+          Geom::Point3d.new(0, hw, -depth.mm)
+        )
+      end
       if face.nil?
         g.erase!
         next
       end
-      face.reverse! if face.normal.z < 0
-      face.pushpull(depth.mm)
+      if steel
+        face.reverse! if face.normal.x < 0
+        face.pushpull(len.mm)
+      else
+        face.reverse! if face.normal.z < 0
+        face.pushpull(depth.mm)
+      end
       g.transform!(
         Geom::Transformation.translation([x1.mm, y1.mm, z_top.mm]) *
         Geom::Transformation.rotation(ORIGIN, Z_AXIS, Math.atan2(y2 - y1, x2 - x1))
       )
-      g.name = format('梁_%03d', i + 1)
-      g.layer = layer_beam
-      g.material = mat_beam
+      if steel
+        g.name = format('钢梁_%03d', i + 1)
+        g.layer = layer_steel
+        g.material = mat_steel
+      else
+        g.name = format('梁_%03d', i + 1)
+        g.layer = layer_beam
+        g.material = mat_beam
+      end
       beam_n += 1
     end
   end
