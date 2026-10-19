@@ -1,4 +1,4 @@
-# Dismiss ZWCAD font-substitution and proxy-information dialogs while a drawing opens.
+﻿# Dismiss ZWCAD font-substitution and proxy-information dialogs while a drawing opens.
 # Text strings and geometry stay in the DWG; these dialogs only block the open call.
 
 if (-not ("ZwcadDialogGuard" -as [type])) {
@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 public static class ZwcadDialogGuard {
@@ -45,7 +46,25 @@ public static class ZwcadDialogGuard {
   const int WM_COMMAND = 0x0111;
   const int LBN_SELCHANGE = 1;
   const int IDOK = 1;
+  const int GWL_STYLE = -16;
   const uint SMTO_ABORTIFHUNG = 0x0002;
+
+  // 只处理 ZWCAD 自己进程的窗口，避免误点其它程序的对话框。0 表示还没识别出来。
+  public static volatile int TargetPid;
+
+  static readonly string LogPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zwcad_dialogs.log");
+
+  // 关闭未知弹窗时优先点“不影响结果”的按钮，越靠前越优先，“确定”放最后。
+  static readonly string[] PreferCn = new string[] { "\u5ffd\u7565", "\u7ee7\u7eed", "\u5426", "\u53d6\u6d88", "\u5173\u95ed", "\u786e\u5b9a" };
+  static readonly string[] PreferEn = new string[] { "ignore", "continue", "no", "cancel", "close", "ok" };
+  // 这类复选框勾上后 ZWCAD 就不再重复弹同一个窗。
+  static readonly string[] RemindCn = new string[] { "\u4e0d\u518d\u663e\u793a", "\u4e0d\u518d\u8be2\u95ee", "\u59cb\u7ec8\u6267\u884c", "\u4ee5\u540e\u4e0d\u518d" };
+  static readonly string[] RemindEn = new string[] { "don't show", "don't ask", "always" };
+
+  [DllImport("user32.dll")]
+  static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+  [DllImport("user32.dll")]
+  static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
   static bool TrySendInt(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, out int value) {
     IntPtr result;
@@ -63,6 +82,7 @@ public static class ZwcadDialogGuard {
 
   public static void Start() {
     if (thread != null && thread.IsAlive) return;
+    if (TargetPid == 0) TargetPid = FindZwcadPid();
     Stop = false;
     thread = new Thread(Loop);
     thread.IsBackground = true;
@@ -103,6 +123,68 @@ public static class ZwcadDialogGuard {
     return ClassName(hwnd).IndexOf("LISTBOX", StringComparison.OrdinalIgnoreCase) >= 0;
   }
 
+  static int FindZwcadPid() {
+    try {
+      Process[] found = Process.GetProcessesByName("ZWCAD");
+      if (found.Length > 0) return found[0].Id;
+    } catch {}
+    return 0;
+  }
+
+  static int ProcessIdOf(IntPtr hwnd) {
+    uint pid;
+    GetWindowThreadProcessId(hwnd, out pid);
+    return (int)pid;
+  }
+
+  static int StyleOf(IntPtr hwnd) {
+    try { return GetWindowLong(hwnd, GWL_STYLE); } catch { return 0; }
+  }
+
+  static bool IsCheckBox(IntPtr hwnd) {
+    int kind = StyleOf(hwnd) & 0xF;
+    return kind == 2 || kind == 3 || kind == 5 || kind == 6;
+  }
+
+  static bool IsDefaultButton(IntPtr hwnd) {
+    return (StyleOf(hwnd) & 0xF) == 1;
+  }
+
+  static bool IsChecked(IntPtr hwnd) {
+    int value;
+    return TrySendInt(hwnd, BM_GETCHECK, IntPtr.Zero, IntPtr.Zero, out value) && value == 1;
+  }
+
+  static int PreferRank(string text) {
+    string t = (text == null ? "" : text).Trim();
+    if (t.Length == 0) return -1;
+    for (int i = 0; i < PreferCn.Length; i++) {
+      if (t.IndexOf(PreferCn[i], StringComparison.Ordinal) >= 0) return i;
+    }
+    for (int i = 0; i < PreferEn.Length; i++) {
+      if (string.Equals(t, PreferEn[i], StringComparison.OrdinalIgnoreCase)) return i;
+    }
+    return -1;
+  }
+
+  static bool IsRememberBox(string text) {
+    string t = (text == null ? "" : text).Trim();
+    if (t.Length == 0) return false;
+    for (int i = 0; i < RemindCn.Length; i++) {
+      if (t.IndexOf(RemindCn[i], StringComparison.Ordinal) >= 0) return true;
+    }
+    for (int i = 0; i < RemindEn.Length; i++) {
+      if (t.IndexOf(RemindEn[i], StringComparison.OrdinalIgnoreCase) >= 0) return true;
+    }
+    return false;
+  }
+
+  static void Log(string title, string action) {
+    try {
+      System.IO.File.AppendAllText(LogPath, DateTime.Now.ToString("HH:mm:ss") + " | " + title + " | " + action + "\r\n");
+    } catch {}
+  }
+
   static bool TooSoon(IntPtr hwnd) {
     long key = hwnd.ToInt64();
     int now = Environment.TickCount;
@@ -113,13 +195,18 @@ public static class ZwcadDialogGuard {
   }
 
   static void Sweep() {
+    if (TargetPid == 0) TargetPid = FindZwcadPid();
     EnumWindows(delegate(IntPtr hwnd, IntPtr lParam) {
       if (!IsWindowVisible(hwnd)) return true;
+      if (TargetPid != 0 && ProcessIdOf(hwnd) != TargetPid) return true;
       string title = WindowText(hwnd);
+      if (title.Length == 0) return true;
       if (title.IndexOf("\u6307\u5b9a\u5b57\u4f53") >= 0 || title.IndexOf("Specify Font") >= 0) {
         AcceptFont(hwnd);
       } else if (title.IndexOf("\u4ee3\u7406\u4fe1\u606f") >= 0 || title.IndexOf("Proxy Information") >= 0) {
         AcceptProxy(hwnd);
+      } else if (TargetPid != 0 && ClassName(hwnd) == "#32770") {
+        AcceptDefault(hwnd, title);
       }
       return true;
     }, IntPtr.Zero);
@@ -176,6 +263,49 @@ public static class ZwcadDialogGuard {
     }, IntPtr.Zero);
     try { SetForegroundWindow(dialog); } catch {}
     ClickOkButton(dialog, ok);
+  }
+
+  // 其它没见过的弹窗（例如“缺少 SHX 文件”“打开 2004 格式图纸”之类）：先勾上“不再提示”复选框，
+  // 再按上面 PreferCn/PreferEn 的顺序点最不影响结果的按钮，都找不到才退回 IDOK，也就是按回车。
+  static void AcceptDefault(IntPtr dialog, string title) {
+    if (TooSoon(dialog)) return;
+    List<IntPtr> remember = new List<IntPtr>();
+    int[] bestRank = new int[] { int.MaxValue };
+    IntPtr[] bestButton = new IntPtr[] { IntPtr.Zero };
+    IntPtr[] defButton = new IntPtr[] { IntPtr.Zero };
+    EnumChildWindows(dialog, delegate(IntPtr child, IntPtr lParam) {
+      if (!IsButton(child)) return true;
+      string text = WindowText(child);
+      if (IsCheckBox(child)) {
+        if (IsRememberBox(text) && !IsChecked(child)) remember.Add(child);
+        return true;
+      }
+      if (text.Length > 0) {
+        int rank = PreferRank(text);
+        if (rank >= 0 && rank < bestRank[0]) {
+          bestRank[0] = rank;
+          bestButton[0] = child;
+        }
+      }
+      if (defButton[0] == IntPtr.Zero && IsDefaultButton(child)) defButton[0] = child;
+      return true;
+    }, IntPtr.Zero);
+    try { SetForegroundWindow(dialog); } catch {}
+    foreach (IntPtr box in remember) {
+      PostMessage(box, BM_CLICK, IntPtr.Zero, IntPtr.Zero);
+      Log(title, "remember " + WindowText(box));
+    }
+    if (bestButton[0] != IntPtr.Zero) {
+      PostMessage(bestButton[0], BM_CLICK, IntPtr.Zero, IntPtr.Zero);
+      Log(title, "click " + WindowText(bestButton[0]));
+    } else if (defButton[0] != IntPtr.Zero) {
+      PostMessage(defButton[0], BM_CLICK, IntPtr.Zero, IntPtr.Zero);
+      Log(title, "click default");
+    } else {
+      PostMessage(dialog, WM_COMMAND, new IntPtr(IDOK), IntPtr.Zero);
+      Log(title, "send IDOK");
+    }
+    Interlocked.Increment(ref ClosedCount);
   }
 
   static void ClickOkButton(IntPtr dialog, IntPtr ok) {
