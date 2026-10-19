@@ -2,7 +2,7 @@
 # The web computer runs frontend\web.ps1 and forwards /api here.
 # Foreground, reloads when server.ps1 or lib\*.ps1 changes:
 #   powershell -NoProfile -ExecutionPolicy Bypass -STA -File server.ps1
-# Open directly:  http://10.1.12.30:8780/
+# Serves /api/* only. Pages come from the web computer running frontend\web.ps1.
 
 param([switch]$Child)
 
@@ -51,7 +51,7 @@ if (-not $Child) {
   }
 
   Write-Host "前台运行。修改 server.ps1 或 lib 下的脚本会自动重启，按 Ctrl+C 停止。"
-  Write-Host "打开 http://127.0.0.1:8780/ 。其他电脑使用这台电脑的局域网 IP 加 :8780 。"
+  Write-Host "本机打开 http://127.0.0.1:8780/api/status 可查看三个软件的连接状态。"
   $proc = $null
   $stamp = Get-ScriptStamp
   try {
@@ -94,7 +94,6 @@ if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne "STA") {
   exit 1
 }
 
-$Www = Join-Path $Root "www"
 $Jobs = Join-Path $Root "jobs"
 $Sample = Join-Path $Root "sample.dwg"
 New-Item -ItemType Directory -Force -Path $Jobs | Out-Null
@@ -659,6 +658,28 @@ function Get-NumberField {
   return $value
 }
 
+function Get-AllowedClientIps {
+  $raw = [Environment]::GetEnvironmentVariable("ALLOWED_CLIENT_IPS", "Process")
+  if (-not $raw) { return @() }
+  $list = New-Object System.Collections.ArrayList
+  foreach ($item in $raw.Split(",")) {
+    $ip = $item.Trim()
+    if ($ip) { [void]$list.Add($ip) }
+  }
+  return $list.ToArray()
+}
+
+function Test-ClientAllowed {
+  param($Context)
+  $allowed = Get-AllowedClientIps
+  if ($allowed.Count -eq 0) { return $true }
+  $addr = $Context.Request.RemoteEndPoint.Address
+  if ($addr.IsIPv4MappedToIPv6) { $addr = $addr.MapToIPv4() }
+  $remote = $addr.ToString()
+  foreach ($ip in $allowed) { if ($ip -eq $remote) { return $true } }
+  return $false
+}
+
 Import-ProjectEnv (Join-Path $Root ".env")
 $script:UploadIndex = Read-UploadIndex
 $listener = New-Object System.Net.HttpListener
@@ -672,6 +693,12 @@ try {
   exit 5
 }
 Write-Host 'listening http://+:8780/'
+$allowedIps = Get-AllowedClientIps
+if ($allowedIps.Count -eq 0) {
+  Write-Host '未设置 ALLOWED_CLIENT_IPS，任何能连到 8780 的机器都可以调用接口。'
+} else {
+  Write-Host ('ALLOWED_CLIENT_IPS = ' + ($allowedIps -join ', '))
+}
 
 try {
   while ($listener.IsListening) {
@@ -679,22 +706,10 @@ try {
     $req = $ctx.Request
     $path = $req.Url.AbsolutePath
     try {
-      if ($req.HttpMethod -eq "GET" -and ($path -eq "/" -or $path -eq "/index.html")) {
-        $file = Join-Path $Www "index.html"
-        $bytes = [System.IO.File]::ReadAllBytes($file)
-        $ctx.Response.ContentType = "text/html; charset=utf-8"
-        $ctx.Response.ContentLength64 = $bytes.Length
-        $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
-      } elseif ($req.HttpMethod -eq "GET" -and $path -eq "/app.css") {
-        $bytes = [System.IO.File]::ReadAllBytes((Join-Path $Www "app.css"))
-        $ctx.Response.ContentType = "text/css; charset=utf-8"
-        $ctx.Response.ContentLength64 = $bytes.Length
-        $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
-      } elseif ($req.HttpMethod -eq "GET" -and $path -eq "/app.js") {
-        $bytes = [System.IO.File]::ReadAllBytes((Join-Path $Www "app.js"))
-        $ctx.Response.ContentType = "text/javascript; charset=utf-8"
-        $ctx.Response.ContentLength64 = $bytes.Length
-        $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+      if (-not (Test-ClientAllowed $ctx)) {
+        Write-TextResponse $ctx 403 "forbidden" "text/plain; charset=utf-8"
+      } elseif ($path -notlike "/api/*") {
+        Write-TextResponse $ctx 404 "not found" "text/plain; charset=utf-8"
       } elseif ($req.HttpMethod -eq "GET" -and $path -eq "/api/status") {
         $zw = $false
         try { [void](Get-ZwcadApp); $zw = $true } catch { $zw = $false }

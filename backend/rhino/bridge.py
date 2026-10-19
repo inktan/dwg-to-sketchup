@@ -127,6 +127,12 @@ def loop():
 
 
 log("bridge script started, python restart")
-thread = threading.Thread(target=loop)
-thread.daemon = False
-thread.start()
+MARKER = "rhinomcp_bridge_running"
+domain = System.AppDomain.CurrentDomain
+if domain.GetData(MARKER):
+    log("bridge already running, skip starting another listener")
+else:
+    domain.SetData(MARKER, True)
+    thread = threading.Thread(target=loop)
+    thread.daemon = False
+    thread.start()

@@ -1,4 +1,4 @@
-# Read a structural DWG through the running ZWCAD, then let deepseek-flash choose beams, columns, walls and the slab.
+﻿# Read a structural DWG through the running ZWCAD, then let deepseek-flash choose beams, columns, walls and the slab.
 
 . (Join-Path $PSScriptRoot "Invoke-DeepSeekParse.ps1")
 . (Join-Path $PSScriptRoot "Close-ZwcadDialogs.ps1")
