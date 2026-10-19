@@ -294,15 +294,24 @@ async function run(url, options) {
   }
 }
 
+function setHostStatus(key, connected) {
+  const node = statusEl.querySelector('[data-key="' + key + '"]');
+  if (!node) return;
+  node.classList.toggle("ok", connected);
+  node.classList.toggle("bad", !connected);
+  const note = node.querySelector("small");
+  if (note) note.textContent = connected ? "已连接" : "未连接";
+}
+
 async function refreshStatus() {
   try {
     const response = await fetch("/api/status");
     const data = await response.json();
-    statusEl.querySelector('[data-key="zwcad"]').className = data.zwcad ? "ok" : "bad";
-    statusEl.querySelector('[data-key="sketchup"]').className = data.sketchup ? "ok" : "bad";
-    statusEl.querySelector('[data-key="rhino"]').className = data.rhino ? "ok" : "bad";
+    setHostStatus("zwcad", !!data.zwcad);
+    setHostStatus("sketchup", !!data.sketchup);
+    setHostStatus("rhino", !!data.rhino);
   } catch {
-    statusEl.querySelectorAll("span").forEach((node) => { node.className = "bad"; });
+    ["zwcad", "sketchup", "rhino"].forEach((key) => setHostStatus(key, false));
   }
 }
 
