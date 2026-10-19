@@ -2,7 +2,7 @@
 
 建模电脑上的程序。中望 CAD、SketchUp、Rhino 和这个目录必须在同一台已登录的桌面上。不要把它做成 Windows 服务：这三个软件都要在交互桌面里开着。
 
-仓库路径固定为 `C:\set\dwg-to-sketchup`。换目录后，SketchUp 和 Rhino 会找不到建模脚本。
+把仓库克隆到本机任意目录。服务、SketchUp 和 Rhino 都从 `backend` 这个文件夹往下找文件。
 
 ## 文件
 
@@ -23,15 +23,16 @@
 | `sketchup\boot_sketchup_mcp.rb` | 在已打开的 SketchUp 里加载插件并开始监听 |
 | `www` | 直接打开建模电脑时使用的页面，内容和 `frontend\www` 保持一致 |
 | `jobs\<id>\` | 一次任务的 DWG、`floor.json`、`model.skp`、`model.3dm`。运行时生成 |
+| `sample.dwg` | 可选。放在 `backend` 目录后，页面会出现「使用示例图纸」 |
 
 含中文的 `.ps1` 必须保存为 **UTF-8 带 BOM**。Windows PowerShell 5.1 否则会按系统 ANSI 代码页解析，中文引号会被拆开，整份脚本报语法错误。`lib\Send-Rhino.ps1` 的源码是英文，中文提示在运行时拼出来。
 
 ## 启动建模服务
 
-三个软件按下一节准备好之后，在本目录执行：
+三个软件按下一节准备好之后，在 `backend` 目录执行：
 
 ```text
-powershell -NoProfile -ExecutionPolicy Bypass -STA -File C:\set\dwg-to-sketchup\backend\server.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -STA -File .\server.ps1
 ```
 
 `-STA` 不能省。中望 CAD 的 COM 只有在单线程套间里才能调用。
@@ -56,8 +57,10 @@ netsh http add urlacl url=http://+:8780/ user=Everyone
 
 插件代码在 `sketchup\su_mcp\main.rb`，监听 `127.0.0.1:9876`。打开 SketchUp 后，Ruby 控制台执行：
 
+把下面路径里的仓库位置换成这台电脑上的实际目录：
+
 ```ruby
-load 'C:/set/dwg-to-sketchup/backend/sketchup/boot_sketchup_mcp.rb'
+load 'D:/work/dwg-to-sketchup/backend/sketchup/boot_sketchup_mcp.rb'
 ```
 
 控制台出现 `MCP: Server started and listening`，并且 `backend\sketchup-mcp-status.txt` 以 `listening` 开头。每次重新打开 SketchUp 都要再执行一次。扩展加载本身不会打开端口。
@@ -74,8 +77,10 @@ netstat -ano | findstr "127.0.0.1:9876"
 
 先打开 Rhino 8。在底部命令行执行：
 
+把下面路径里的仓库位置换成这台电脑上的实际目录：
+
 ```text
-_-RunPythonScript "C:/set/dwg-to-sketchup/backend/rhino/bridge.py"
+_-RunPythonScript "D:/work/dwg-to-sketchup/backend/rhino/bridge.py"
 ```
 
 开头的 `_-` 要保留：按英文命令名执行，并且不弹出选文件窗口。成功后日志 `%TEMP%\rhinomcp_bridge.log` 里有 `listening on 127.0.0.1:2000`。使用 2000，不要用 1999。关掉 Rhino 后端口消失，下次重新执行这一句。

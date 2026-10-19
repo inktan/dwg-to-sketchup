@@ -85,7 +85,9 @@ function Invoke-RhinoBuild {
   $resultPath = Join-Path $JobDir "rhino_result.json"
   $modelPath = Join-Path $JobDir "model.3dm"
   if (Test-Path -LiteralPath $resultPath) { Remove-Item -LiteralPath $resultPath -Force }
-  $command = '_-RunPythonScript "C:/set/dwg-to-sketchup/backend/rhino/build.py"'
+  $backendRoot = Split-Path $PSScriptRoot -Parent
+  $buildPy = (Join-Path $backendRoot "rhino\build.py") -replace '\\', '/'
+  $command = "_-RunPythonScript `"$buildPy`""
   $raw = Send-RhinoFrame @{ type = "run_command"; params = @{ command = $command } }
   if (-not (Test-Path -LiteralPath $resultPath)) {
     throw ("Rhino " + (Zh "6CA16709519956DE7ED3679C3002") + $raw)

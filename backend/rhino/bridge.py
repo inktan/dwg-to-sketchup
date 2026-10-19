@@ -1,6 +1,7 @@
 # coding: utf-8
 # IronPython 2.7 bridge inside the already-open Rhino. Listens on 127.0.0.1:2000.
 import json
+import os
 import socket
 import struct
 import threading
@@ -12,7 +13,7 @@ import scriptcontext as sc
 
 HOST = "127.0.0.1"
 PORT = 2000
-LOG = r"C:\Users\wang.tan\AppData\Local\Temp\rhinomcp_bridge.log"
+LOG = os.path.join(os.environ.get("TEMP") or os.environ.get("TMP") or ".", "rhinomcp_bridge.log")
 
 
 def log(msg):

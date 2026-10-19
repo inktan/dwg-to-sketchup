@@ -96,7 +96,7 @@ if ([System.Threading.Thread]::CurrentThread.GetApartmentState() -ne "STA") {
 
 $Www = Join-Path $Root "www"
 $Jobs = Join-Path $Root "jobs"
-$Sample = "C:\set\图纸+结构计算书.dwg"
+$Sample = Join-Path $Root "sample.dwg"
 New-Item -ItemType Directory -Force -Path $Jobs | Out-Null
 . (Join-Path $Root "lib\Extract-DwgStructure.ps1")
 . (Join-Path $Root "lib\Send-SketchUp.ps1")
@@ -510,7 +510,8 @@ function Invoke-StructureBuild {
   $sketchupDetail = "分析已经完成：梁 $beamCount、柱 $columnCount、墙 $wallCount。正在 SketchUp 里创建这些构件，并保存 skp。"
   if ($OnProgress) { & $OnProgress "写入 SketchUp" $sketchupDetail }
   Start-ProgressHeartbeat -Step "写入 SketchUp" -Detail $sketchupDetail
-  $raw = Send-SketchUpRuby -Code "load 'C:/set/dwg-to-sketchup/backend/ruby/build.rb'"
+  $rubyScript = (Join-Path $Root "ruby\build.rb") -replace '\\', '/'
+  $raw = Send-SketchUpRuby -Code "load '$rubyScript'"
   Stop-ProgressHeartbeat
   $resultPath = Join-Path $dir "build_result.json"
   $skp = Join-Path $dir "model.skp"

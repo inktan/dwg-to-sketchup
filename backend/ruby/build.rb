@@ -4,7 +4,7 @@
 
 require 'json'
 
-JOB_FILE = 'C:/set/dwg-to-sketchup/backend/ruby/job.txt'
+JOB_FILE = File.expand_path('job.txt', File.dirname(__FILE__))
 
 def write_result(path, obj)
   File.write(path, JSON.generate(obj), encoding: 'UTF-8')

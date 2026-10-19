@@ -4,11 +4,12 @@
 
 import json
 import math
+import os
 import System
 import scriptcontext as sc
 import Rhino
 
-JOB_FILE = r"C:/set/dwg-to-sketchup/backend/ruby/job.txt"
+JOB_FILE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ruby", "job.txt"))
 
 
 def read_job():
