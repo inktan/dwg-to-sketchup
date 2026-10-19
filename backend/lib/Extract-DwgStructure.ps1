@@ -382,8 +382,26 @@ function Export-DwgInventory {
   }
   $boxes = @{}
   foreach ($space in $bag.Spaces) { $boxes[[string]$space.name] = $space.bbox }
-  Write-Host ("inventory spaces " + $bag.Spaces.Count + " entities " + $bag.Entities.Count)
+  Write-Host ((Get-BuildTag) + " 图元清单：" + $bag.Spaces.Count + " 个空间，" + $bag.Entities.Count + " 个图元")
   return @{ Inventory = $inventory; Index = $bag.Index; SpaceBoxes = $boxes }
+}
+
+# 上一个任务被中止时（用户关掉或刷新了页面），ZWCAD 里可能还开着那次任务的图纸。
+# 每次读图前把这类遗留文档关掉，不影响用户自己打开的图纸。
+function Close-StaleJobDocs {
+  param($App)
+  try {
+    $list = @()
+    foreach ($d in @($App.Documents)) { $list += $d }
+    foreach ($d in $list) {
+      $full = ""
+      try { $full = [string]$d.FullName } catch {}
+      if ($full -and $full -like "*\jobs\*source.dwg") {
+        try { $d.Close($false) } catch {}
+        Write-Host ((Get-BuildTag) + " 已关闭上次任务遗留的图纸：" + $full)
+      }
+    }
+  } catch {}
 }
 
 function Extract-DwgStructure {
@@ -403,6 +421,7 @@ function Extract-DwgStructure {
     Start-ProgressHeartbeat -Step "读取图纸" -Detail $readDetail
   }
   $app = Get-ZwcadApp
+  Close-StaleJobDocs -App $app
   $beforeDialogs = [ZwcadDialogGuard]::ClosedCount
   [ZwcadDialogGuard]::Start()
   $opened = $null
@@ -414,7 +433,7 @@ function Extract-DwgStructure {
     Start-Sleep -Milliseconds 300
     [ZwcadDialogGuard]::StopGuard()
     $closedDialogs = [ZwcadDialogGuard]::ClosedCount - $beforeDialogs
-    if ($closedDialogs -gt 0) { Write-Host ("已关闭 CAD 弹窗 " + $closedDialogs + " 次") }
+    if ($closedDialogs -gt 0) { Write-Host ((Get-BuildTag) + " 本次读图关闭 CAD 弹窗 " + $closedDialogs + " 次") }
     if ($opened -and $opened.Opened) {
       try { $opened.Doc.Close($false) } catch {}
     }

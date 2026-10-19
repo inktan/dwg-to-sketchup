@@ -12,8 +12,9 @@
 |---|---|
 | `server.ps1` | 监听 `8780`，接收上传，驱动读图和建模。修改 `server.ps1`、`lib\*.ps1` 或 `.env` 后自动重启子进程 |
 | `.env` | `DEEPSEEK_API_KEY`。从 `.env.example` 复制，不要提交 |
-| `lib\Extract-DwgStructure.ps1` | 用中望 CAD 读 DWG，整理图元清单 |
+| `lib\Extract-DwgStructure.ps1` | 用中望 CAD 读 DWG，整理图元清单；读图前先关闭上次任务遗留的 `jobs\*source.dwg` 文档 |
 | `lib\Invoke-DeepSeekParse.ps1` | 把图元和规则发给 DeepSeek，再还原成梁、柱、墙、楼板 |
+| `lib\BuildPipeline.ps1` | 建模流水线与任务锁：任务计数、进度心跳、连接断开自动终止、DeepSeek 分析、驱动 SketchUp/Rhino |
 | `lib\Close-ZwcadDialogs.ps1` | 读图时关掉字体替换等弹窗 |
 | `lib\Send-SketchUp.ps1` | 连接 `127.0.0.1:9876`，执行 Ruby |
 | `lib\Send-Rhino.ps1` | 连接 `127.0.0.1:2000`，发送 Rhino 命令 |
@@ -106,6 +107,16 @@ netstat -ano | findstr "127.0.0.1:2000"
 
 DeepSeek 第一次请求开启思考模式。没有返回完整 JSON 时，关闭思考模式再请求一次。
 
+## 并发与任务终止
+
+同一时刻只执行一个建模任务：三个软件共用一个桌面，读图和建模必须串行。建模进行中收到新上传时，接口直接返回「当前已有任务正在建模，请等待它完成后再上传」，页面弹窗提示，不排队。
+
+用户关闭或刷新页面时，前端代理立刻断开与后端的连接；后端进度心跳写失败后，2 秒内自动终止子进程，正在进行的读图、DeepSeek 请求和 SketchUp/Rhino 调用随进程一起结束，父进程随后重启监听进程。这样被中断的任务不会拖进下一个任务：
+
+- 中望 CAD：下次读图前自动关闭上次遗留的 `jobs\*source.dwg` 文档，不影响用户自己打开的图纸。
+- SketchUp：每次建模前删除旧任务构件并清理未使用项。
+- Rhino：每次建模前删除 `Stru*` 前缀的旧构件。
+
 ## 进度
 
 `/api/build` 返回 `application/x-ndjson`。每一行是一个 JSON 对象：
@@ -113,7 +124,7 @@ DeepSeek 第一次请求开启思考模式。没有返回完整 JSON 时，关�
 | 字段 | 含义 |
 |---|---|
 | `status=run` | 新步骤开始 |
-| `status=tick` | 同一步骤的心跳，约 2 秒一次 |
+| `status=tick` | 同一步骤的心跳，约 2 秒一次；写失败即视为连接断开，后端终止当前任务 |
 | `status=done` | 该步骤结束，`stepSeconds` 是这一步的秒数 |
 | `step` | 步骤名，例如「读取图纸」「DeepSeek 分析」「写入 SketchUp」 |
 | `detail` | 这一步正在做什么 |

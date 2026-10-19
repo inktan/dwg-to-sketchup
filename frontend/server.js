@@ -119,6 +119,11 @@ function proxy(req, res, upstream) {
   req.on("aborted", () => upstreamReq.destroy());
   req.on("error", () => upstreamReq.destroy());
   res.on("error", () => upstreamReq.destroy());
+  // 浏览器关闭或刷新页面时，立刻断开与后端的连接；
+  // 后端靠 NDJSON 心跳写失败感知，自动终止正在进行的任务。
+  res.on("close", () => {
+    if (!res.writableEnded) upstreamReq.destroy();
+  });
   if (res.socket) res.socket.setNoDelay(true);
   req.pipe(upstreamReq);
 }

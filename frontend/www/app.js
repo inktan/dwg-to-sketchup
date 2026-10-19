@@ -182,19 +182,26 @@ function showResult(data) {
     ["墙", counts.walls],
     ["楼板", counts.slab]
   ];
-  countsEl.innerHTML = rows.map(([name, value]) =>
-    `<div><dt>${name}</dt><dd>${value ?? 0}</dd></div>`
-  ).join("");
+  const known = rows.every(([, value]) =>
+    value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
+  );
+  countsEl.hidden = !known;
+  countsEl.innerHTML = known
+    ? rows.map(([name, value]) => `<div><dt>${name}</dt><dd>${Number(value)}</dd></div>`).join("")
+    : "";
   const usage = data.usage || {};
   const hosts = data.hosts || {};
-  let text = data.summary || "构件已经生成。";
-  if (data.story != null && data.story !== "") text += ` 层高 ${data.story} mm，板厚 ${data.slabThick} mm。`;
-  if (usage.prompt) text += ` deepseek-flash 输入 ${usage.prompt}、输出 ${usage.completion} tokens。`;
   const placed = ["SketchUp"];
   if (hosts.rhino) placed.push("Rhino");
-  text += "模型已放入" + placed.join("、") + "。";
+  let text = "模型已创建，已放入" + placed.join("、") + "。";
+  if (known) {
+    text = data.summary || "构件已经生成。";
+    if (data.story != null && data.story !== "") text += ` 层高 ${data.story} mm，板厚 ${data.slabThick} mm。`;
+    if (usage.prompt) text += ` deepseek-flash 输入 ${usage.prompt}、输出 ${usage.completion} tokens。`;
+    text += "模型已放入" + placed.join("、") + "。";
+  }
   sourceEl.textContent = text;
-  resultTitle.textContent = "模型已生成";
+  resultTitle.textContent = known ? "模型已生成" : "模型已创建";
   const warnings = asList(data.warnings);
   warningsEl.hidden = warnings.length === 0;
   warningsEl.textContent = warnings.join(" ");

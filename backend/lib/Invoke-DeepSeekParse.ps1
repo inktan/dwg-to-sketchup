@@ -463,7 +463,7 @@ function Invoke-DeepSeekStructure {
     & $OnProgress "打包图元" "已从 CAD 读出 $entityCount 个图元、$layerCount 个图层。正在把图元清单和默认梁柱墙板规则打包成同一次分析请求。"
   }
   $inventoryJson = Expand-JsonUnicode (ConvertTo-ApiJson $Inventory)
-  Write-Host ("deepseek inventory chars " + $inventoryJson.Length)
+  Write-Host ((Get-BuildTag) + " 图元清单文本 " + $inventoryJson.Length + " 字符，交给 DeepSeek 分析")
   $wan = [math]::Round($inventoryJson.Length / 10000.0, 1)
   $plan = $null
   $usage = @{ prompt = 0; completion = 0 }
@@ -498,7 +498,7 @@ function Invoke-DeepSeekStructure {
       break
     } catch {
       $lastError = [string]$_.Exception.Message
-      Write-Host "deepseek attempt failed"
+      Write-Host ((Get-BuildTag) + " DeepSeek 第一次请求没有返回完整 JSON，关闭思考模式重试")
       if ($lastError -match "API Key") { throw $lastError }
     }
   }
