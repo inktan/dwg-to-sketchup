@@ -502,6 +502,9 @@ function Parse-ElevationText {
   if ($t -match ('(' + $number + ')\s*[\(（]\s*屋脊\s*[\)）]')) {
     $num = $Matches[1]
     $role = 'ridge'
+  } elseif ($t -match ('(' + $number + ')\s*[\(（]\s*屋檐\s*[\)）]')) {
+    $num = $Matches[1]
+    $role = 'eave'
   } elseif ($t -match ('(?:▽|▼|标高|(?i)\bEL\b|(?i)\bH\s*[=＝])\s*(' + $number + ')')) {
     $num = $Matches[1]
     $role = 'level'
@@ -714,8 +717,39 @@ function New-BeamPiece {
   }
 }
 
+function Get-EaveMarks {
+  param($Index)
+  $marks = New-Object System.Collections.Generic.List[object]
+  foreach ($id in @($Index.Keys)) {
+    $local = $Index[$id]
+    if ($null -eq $local) { continue }
+    if ([string]$local.type -ne "text") { continue }
+    if ([string]$local.role -ne "eave") { continue }
+    if ($null -eq $local.zMm) { continue }
+    $marks.Add([pscustomobject]@{ x = [double]$local.x; y = [double]$local.y; z = [double]$local.zMm }) | Out-Null
+  }
+  return ,$marks
+}
+
+function Get-EaveLowZ {
+  param([double]$X, [double]$Y, $Eaves)
+  if ($null -eq $Eaves -or [int]$Eaves.Count -eq 0) { return 0.0 }
+  $bestD = [double]::MaxValue
+  $bestZ = 0.0
+  foreach ($mark in $Eaves) {
+    $dx = [double]$mark.x - $X
+    $dy = [double]$mark.y - $Y
+    $d = $dx * $dx + $dy * $dy
+    if ($d -lt $bestD) {
+      $bestD = $d
+      $bestZ = [double]$mark.z
+    }
+  }
+  return $bestZ
+}
+
 function Get-SegmentRidgePieces {
-  param($Beam, [double]$Ax, [double]$Ay, [double]$Bx, [double]$By, $Ridges, [double]$Story)
+  param($Beam, [double]$Ax, [double]$Ay, [double]$Bx, [double]$By, $Ridges, $Eaves)
   $best = $null
   foreach ($ridge in $Ridges) {
     $hit = Get-RidgeCrossing $Ax $Ay $Bx $By $ridge.x1 $ridge.y1 $ridge.x2 $ridge.y2
@@ -743,34 +777,37 @@ function Get-SegmentRidgePieces {
     }
   }
   if ($null -eq $best) { return $null }
+  $zA = Get-EaveLowZ $Ax $Ay $Eaves
+  $zB = Get-EaveLowZ $Bx $By $Eaves
   $list = New-Object System.Collections.Generic.List[object]
   if ($best.onSeg) {
-    $list.Add((New-BeamPiece $Beam (New-SlopePts $Ax $Ay $Story $best.x $best.y $best.z) $true)) | Out-Null
-    $list.Add((New-BeamPiece $Beam (New-SlopePts $best.x $best.y $best.z $Bx $By $Story) $true)) | Out-Null
+    $list.Add((New-BeamPiece $Beam (New-SlopePts $Ax $Ay $zA $best.x $best.y $best.z) $true)) | Out-Null
+    $list.Add((New-BeamPiece $Beam (New-SlopePts $best.x $best.y $best.z $Bx $By $zB) $true)) | Out-Null
   } else {
     $fx = $Bx
     $fy = $By
-    if ($best.dA -gt $best.dB) { $fx = $Ax; $fy = $Ay }
-    $list.Add((New-BeamPiece $Beam (New-SlopePts $best.x $best.y $best.z $fx $fy $Story) $true)) | Out-Null
+    $fz = $zB
+    if ($best.dA -gt $best.dB) { $fx = $Ax; $fy = $Ay; $fz = $zA }
+    $list.Add((New-BeamPiece $Beam (New-SlopePts $best.x $best.y $best.z $fx $fy $fz) $true)) | Out-Null
   }
   return ,$list
 }
 
 function Get-BeamRidgePieces {
-  param($Beam, $Ridges, [double]$Story)
+  param($Beam, $Ridges, $Eaves)
   $pts = $null
   if ($Beam -is [System.Collections.IDictionary]) { $pts = $Beam["pts"] }
   if ($null -eq $pts -or [int]$pts.Count -lt 2) { return $null }
   $n = [int]$pts.Count
   if ($n -eq 2) {
-    $part = Get-SegmentRidgePieces $Beam ([double]$pts[0][0]) ([double]$pts[0][1]) ([double]$pts[1][0]) ([double]$pts[1][1]) $Ridges $Story
+    $part = Get-SegmentRidgePieces $Beam ([double]$pts[0][0]) ([double]$pts[0][1]) ([double]$pts[1][0]) ([double]$pts[1][1]) $Ridges $Eaves
     if ($null -eq $part) { return $null }
     return ,$part
   }
   $all = New-Object System.Collections.Generic.List[object]
   $hit = $false
   for ($i = 0; $i -lt ($n - 1); $i++) {
-    $part = Get-SegmentRidgePieces $Beam ([double]$pts[$i][0]) ([double]$pts[$i][1]) ([double]$pts[$i + 1][0]) ([double]$pts[$i + 1][1]) $Ridges $Story
+    $part = Get-SegmentRidgePieces $Beam ([double]$pts[$i][0]) ([double]$pts[$i][1]) ([double]$pts[$i + 1][0]) ([double]$pts[$i + 1][1]) $Ridges $Eaves
     if ($null -eq $part) {
       $flat = New-SlopePts ([double]$pts[$i][0]) ([double]$pts[$i][1]) 0 ([double]$pts[$i + 1][0]) ([double]$pts[$i + 1][1]) 0
       $all.Add((New-BeamPiece $Beam $flat $false)) | Out-Null
@@ -841,13 +878,14 @@ function Set-BeamTopZ {
 }
 
 function Apply-RidgeSlopeBeams {
-  param($Beams, $Index, [double]$Story)
+  param($Beams, $Index)
   $ridges = Get-RidgeLines $Index
+  $eaves = Get-EaveMarks $Index
   if ($null -eq $ridges -or [int]$ridges.Count -eq 0) { return 0 }
   $next = New-Object System.Collections.Generic.List[object]
   $slopeCount = 0
   foreach ($beam in $Beams) {
-    $pieces = Get-BeamRidgePieces -Beam $beam -Ridges $ridges -Story $Story
+    $pieces = Get-BeamRidgePieces -Beam $beam -Ridges $ridges -Eaves $eaves
     if ($null -eq $pieces) {
       $next.Add($beam) | Out-Null
       continue
@@ -885,7 +923,9 @@ function Apply-RidgeSlopeBeams {
   $tag = ""
   if (Get-Command Get-BuildTag -ErrorAction SilentlyContinue) { $tag = Get-BuildTag + " " }
   if ($slopeCount -gt 0) {
-    Write-Host ($tag + "斜梁 " + $slopeCount + " 根：交点用屋脊标高，另一端用层高 " + $Story + " mm")
+    $lowNote = "0"
+    if ($null -ne $eaves -and [int]$eaves.Count -gt 0) { $lowNote = "屋檐标高" }
+    Write-Host ($tag + "斜梁 " + $slopeCount + " 根：交点用屋脊标高，低点用 " + $lowNote)
   }
   if ($ridgeBeamCount -gt 0) {
     Write-Host ($tag + "屋脊梁 " + $ridgeBeamCount + " 根：梁顶用屋脊标高")
@@ -1006,9 +1046,10 @@ storyMm 和 slabThickMm 采用用户给出的默认值，除非文字明确只�
 坡屋顶斜梁（你只选梁中心线 id，分段和标高由程序计算）：
 - 第一步与屋脊线无关：把所有梁中心定位线放进 beams。带 axis:center 的选这个中心线 id；没有 axis 的线按自身坐标。间距小于 190 mm 的平行线各选各的 id。
 - 只认带「屋脊」的文字，例如 15.850(屋脊)。15.850 按米是 15850 mm，也就是 15.85 m，是绝对标高，不要加到层高上。文字本身不是梁，不要选成梁、柱或截面。
+- 斜梁低点只认带「屋檐」的文字，例如 12.600(屋檐)。12.600 按米是 12600 mm。这种文字不是梁，不要选。没有屋檐文字时，程序把斜梁低点设为 0，不用用户给出的层高。
 - 屋脊线是该文字 2500 mm 内、与文字方向平行、距离最近的那条线。沿这根屋脊线的梁中心线是屋脊梁，必须放进 beams。程序把屋脊梁的梁顶设成这个屋脊标高。你不要改定位线，也不要输出高度。
-- 第二步由程序做：梁中心线与屋脊线相交时，在交点分成两段。交点高度用屋脊标高，另一端高度用用户给出的层高。
-- 若梁中心线与屋脊线不相交，程序把中心线两侧向外各延长不超过 300 mm。延长后有交点时，新定位线是交点到较远的那个原端点。交点用屋脊标高，另一端用层高。
+- 第二步由程序做：梁中心线与屋脊线相交时，在交点分成两段。交点高度用屋脊标高，另一端高度用离该端最近的屋檐标高；没有屋檐文字时为 0。
+- 若梁中心线与屋脊线不相交，程序把中心线两侧向外各延长不超过 300 mm。延长后有交点时，新定位线是交点到较远的那个原端点。交点用屋脊标高，另一端用屋檐标高；没有屋檐文字时为 0。
 - 这些梁在 JSON 里仍然只输出原来的那一个中心线 id，放进 beams。不要拆成两个 id，不要输出 slopeBeams，不要输出高度或 verts。
 
 整张图完全不符合上面的预定规则时，必须自行判断，并思考这套结构是否合理：
@@ -1031,7 +1072,7 @@ function New-DeepSeekBody {
 - 两根平行线间距小于 190 mm 时，一定是两根不同的梁，必须各选各的 id，禁止合并或取中线。
 
 图纸符合规则时按规则归类。图纸整体不符合预定规则时，不要硬套图层名，要自行判断哪些图元是梁、柱、墙、楼板，并思考这样的结构布置是否合理。id 仍然只能来自清单。
-看到 15.850(屋脊) 时：它旁边最近的平行线是屋脊线。沿屋脊线的梁是屋脊梁，要放进 beams，程序把它的梁顶设成 15.85 m。第一步先把全部梁中心线放进 beams。第二步的相交、分成两段、两侧延长 300 mm、斜梁端点和屋脊梁梁顶都由程序计算。不要输出 slopeBeams，不要编造标高。
+看到 15.850(屋脊) 时：它旁边最近的平行线是屋脊线。沿屋脊线的梁是屋脊梁，要放进 beams，程序把它的梁顶设成 15.85 m。看到 12.600(屋檐) 时，它是斜梁低点标高，不是梁。没有屋檐文字时斜梁低点为 0，不要用层高代替。第一步先把全部梁中心线放进 beams。第二步的相交、分成两段、两侧延长 300 mm、斜梁端点和屋脊梁梁顶都由程序计算。不要输出 slopeBeams，不要编造标高。
 只输出一个 JSON 对象，不要 Markdown，不要解释。格式：
 {"summary":"一两句中文，说明依据","storyMm":3000,"slabThickMm":130,"beams":[{"id":"m1","width":200,"depth":500,"rise":0,"steel":false}],"columns":[{"id":"p1"}],"walls":[{"id":"p2"}],"slabRect":[0,0,1000,1000]}
 $rules
@@ -1040,10 +1081,10 @@ $rules
 请按下面步骤分析，并只输出一个 JSON：
 1. 判断整张图是否符合预定图层规则。
 2. 挑选全部梁中心定位线，这一步与屋脊线无关：优先选 axis 为 center 的图元；没有 axis 的线按它自己的坐标作为定位线；间距小于 190 mm 的平行线各选各的 id，不要合并。
-3. 再挑选柱、墙、楼板。15.850(屋脊) 旁边最近的平行线是屋脊线。沿屋脊线的梁中心线是屋脊梁，放进 beams。会和屋脊线相交、或两侧向外延长不超过 300 mm 后相交的梁，也只把原来的中心线 id 放进 beams。不要输出高度，不要输出 slopeBeams。
+3. 再挑选柱、墙、楼板。15.850(屋脊) 旁边最近的平行线是屋脊线。沿屋脊线的梁中心线是屋脊梁，放进 beams。12.600(屋檐) 只是斜梁低点标高，不要选成梁。会和屋脊线相交、或两侧向外延长不超过 300 mm 后相交的梁，也只把原来的中心线 id 放进 beams。不要输出高度，不要输出 slopeBeams。
 4. summary 用一两句中文说明依据。
 
-用户指定的默认层高是 $Story mm，默认板厚是 $SlabThick mm。程序用这个层高作为斜梁不在屋脊交点那一端的高度。交点和屋脊梁的梁顶都用 15.850(屋脊) 的标高，15.850 就是 15.85 m。你不要在 JSON 里写这些高度。
+用户指定的默认层高是 $Story mm，默认板厚是 $SlabThick mm。层高用于水平梁、柱、墙和楼板，不用于斜梁低点。斜梁低点用图纸上的 12.600(屋檐)；没有屋檐文字时低点为 0。交点和屋脊梁的梁顶用 15.850(屋脊)，15.850 就是 15.85 m。你不要在 JSON 里写这些高度。
 
 $rules
 
@@ -1253,7 +1294,7 @@ function Convert-StructurePlan {
     }
   }
 
-  $slopeCount = Apply-RidgeSlopeBeams -Beams $beams -Index $Index -Story $levelMm
+  $slopeCount = Apply-RidgeSlopeBeams -Beams $beams -Index $Index
   foreach ($beam in $beams) {
     $bpts = $null
     if ($beam -is [System.Collections.IDictionary]) { $bpts = $beam["pts"] }
@@ -1269,7 +1310,7 @@ function Convert-StructurePlan {
   Set-ColumnTops -Columns $columns -Beams $beams -Story $levelMm
   if ($slopeCount -gt 0) {
     if ($summary) { $summary += " " }
-    $summary += "斜梁 $slopeCount 根。梁中心线与屋脊线相交时在交点分成两段；否则两侧向外延长不超过 300 mm，新定位线是交点到较远端点。交点用屋脊标高，另一端用层高 $levelMm mm。沿屋脊线的屋脊梁，梁顶也用屋脊标高。"
+    $summary += "斜梁 $slopeCount 根。梁中心线与屋脊线相交时在交点分成两段；否则两侧向外延长不超过 300 mm，新定位线是交点到较远端点。交点用屋脊标高。低点用图纸上的 12.600(屋檐)，没有屋檐文字时低点为 0，不用页面层高。沿屋脊线的屋脊梁，梁顶用屋脊标高。"
   }
 
   if ($beams.Count -eq 0 -and $columns.Count -eq 0 -and $walls.Count -eq 0) {
@@ -1348,7 +1389,7 @@ function Invoke-DeepSeekStructure {
   try {
   foreach ($think in @($true, $false)) {
     $step = "DeepSeek 分析"
-    $detail = "已提交 $entityCount 个图元、$layerCount 个图层和默认结构规则，约 $wan 万字。模型只选梁中心线 id 和截面，不改定位线，也不输出斜梁高度。有 15.850(屋脊) 时，相交分段和两侧延长 300 mm 由程序计算。这一步通常要几分钟。"
+    $detail = "已提交 $entityCount 个图元、$layerCount 个图层和默认结构规则，约 $wan 万字。模型只选梁中心线 id 和截面，不改定位线，也不输出斜梁高度。有 15.850(屋脊) 时，相交分段和两侧延长 300 mm 由程序计算。斜梁低点用 12.600(屋檐)，没有则用 0。这一步通常要几分钟。"
     if (-not $think) {
       $step = "DeepSeek 重试"
       $detail = "第一次没有返回完整 JSON。正在关闭思考模式，把同一份图元和默认规则再分析一次。"
@@ -1382,6 +1423,6 @@ function Invoke-DeepSeekStructure {
   } finally {
     if (Get-Command Stop-ProgressHeartbeat -ErrorAction SilentlyContinue) { Stop-ProgressHeartbeat }
   }
-  if ($OnProgress) { & $OnProgress "整理结果" "DeepSeek 已返回。正在按图元编号还原梁、柱、墙和楼板。若有屋脊线，梁中心线与它相交时在交点分成两段；否则两侧向外延长不超过 300 mm。" }
+  if ($OnProgress) { & $OnProgress "整理结果" "DeepSeek 已返回。正在按图元编号还原梁、柱、墙和楼板。若有屋脊线，梁中心线与它相交时在交点分成两段；否则两侧向外延长不超过 300 mm。斜梁低点用屋檐标高，没有屋檐文字时为 0。" }
   return Convert-StructurePlan -Plan $plan -Index $Index -SpaceBoxes $SpaceBoxes -Story $Story -SlabThick $SlabThick -Usage $usage -Thinking $thinking
 }
