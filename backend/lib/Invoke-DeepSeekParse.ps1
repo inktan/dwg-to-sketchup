@@ -1,4 +1,4 @@
-﻿# Classify a CAD inventory with deepseek-flash and turn the chosen ids back into floor geometry.
+# Classify a CAD inventory with deepseek-flash and turn the chosen ids back into floor geometry.
 # https://api-docs.deepseek.com/zh-cn/quick_start/pricing
 
 function ConvertTo-ApiJson {

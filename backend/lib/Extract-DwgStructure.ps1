@@ -353,6 +353,7 @@ function Read-CadContainer {
       $textPub["role"] = [string]$parsedElev.role
       $textLocal = @{
         type = "text"; space = $SpaceName; x = [double]$item.x; y = [double]$item.y
+        rot = [double]$item.rot
         zMm = [double]$parsedElev.zMm; role = [string]$parsedElev.role; text = [string]$item.text
       }
     }
