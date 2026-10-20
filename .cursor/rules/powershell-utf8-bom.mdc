@@ -1,0 +1,17 @@
+---
+description: backend 的 PowerShell 脚本必须保持 UTF-8 BOM，否则 Windows PowerShell 5.1 会解析失败并让热更新反复退出
+globs: backend/**/*.ps1
+alwaysApply: true
+---
+
+# PowerShell 脚本保持 UTF-8 BOM
+
+`backend/**/*.ps1` 必须是带 BOM 的 UTF-8。文件前三个字节是 `EF BB BF`。
+
+Windows PowerShell 5.1 把没有 BOM 的 UTF-8 按 GBK（代码页 936）读。中文的多字节尾会吃掉后面的引号，整份脚本解析失败。热更新子进程因此反复退出，控制台出现乱码中文，以及 `Missing closing ')'`、`Missing closing '}'`、`Unexpected token`。
+
+改这些脚本时：
+
+- 保存后立刻核对前三个字节仍是 `EF BB BF`。用字节方式补回 BOM，不要重写整份文件。
+- 编辑工具如果去掉了 BOM，先补回再结束。不要把脚本改成无 BOM 的 UTF-8。
+- 解析失败时先查 BOM，不要按乱码报错去改中文或语法。

@@ -499,12 +499,9 @@ function Parse-ElevationText {
   $role = $null
   $num = $null
   $number = '[\d]+(?:[,，]\d{3})+(?:\.\d+)?|\d+\.\d+|\d+'
-  if ($t -match ('(' + $number + ')\s*[\(（]\s*(脊|檐)\s*[\)）]')) {
+  if ($t -match ('(' + $number + ')\s*[\(（]\s*屋脊\s*[\)）]')) {
     $num = $Matches[1]
-    if ($Matches[2] -eq '脊') { $role = 'ridge' } else { $role = 'eave' }
-  } elseif ($t -match ('檐口\s*(' + $number + ')')) {
-    $num = $Matches[1]
-    $role = 'eave'
+    $role = 'ridge'
   } elseif ($t -match ('(?:▽|▼|标高|(?i)\bEL\b|(?i)\bH\s*[=＝])\s*(' + $number + ')')) {
     $num = $Matches[1]
     $role = 'level'
@@ -558,193 +555,261 @@ function Get-EdgeEndZs {
   return ,$out
 }
 
-function Test-ZsNeedHeight {
-  param($Zs, [double]$Story)
-  $min = [double]::MaxValue
-  $max = [double]::MinValue
-  foreach ($z in @($Zs)) {
-    if ($z -lt $min) { $min = [double]$z }
-    if ($z -gt $max) { $max = [double]$z }
+function Get-DistPointSeg {
+  param([double]$X, [double]$Y, [double]$X1, [double]$Y1, [double]$X2, [double]$Y2)
+  $dx = $X2 - $X1
+  $dy = $Y2 - $Y1
+  $len2 = $dx * $dx + $dy * $dy
+  if ($len2 -lt 1) {
+    $ex = $X - $X1
+    $ey = $Y - $Y1
+    return [math]::Sqrt($ex * $ex + $ey * $ey)
   }
-  if (($max - $min) -gt 50) { return $true }
-  if ([math]::Abs($max - $Story) -gt 50) { return $true }
-  return $false
+  $t = (($X - $X1) * $dx + ($Y - $Y1) * $dy) / $len2
+  if ($t -lt 0) { $t = 0 }
+  if ($t -gt 1) { $t = 1 }
+  $px = $X1 + $t * $dx
+  $py = $Y1 + $t * $dy
+  $ex = $X - $px
+  $ey = $Y - $py
+  return [math]::Sqrt($ex * $ex + $ey * $ey)
 }
 
-function Copy-PointsWithZ {
-  param($Pts, $Zs)
-  $out = New-Object System.Collections.ArrayList
-  $n = 0
-  if ($null -ne $Pts) { $n = [int]$Pts.Count }
-  for ($i = 0; $i -lt $n; $i++) {
-    $pair = New-Object System.Collections.ArrayList
-    [void]$pair.Add([math]::Round([double]$Pts[$i][0], 1))
-    [void]$pair.Add([math]::Round([double]$Pts[$i][1], 1))
-    [void]$pair.Add([math]::Round([double]$Zs[$i], 1))
-    [void]$out.Add($pair)
-  }
-  return ,$out
+function Test-TextParallel {
+  param([double]$Rot, [double]$X1, [double]$Y1, [double]$X2, [double]$Y2)
+  $ang = [math]::Atan2(($Y2 - $Y1), ($X2 - $X1))
+  $d = $ang - $Rot
+  while ($d -gt [math]::PI) { $d = $d - (2 * [math]::PI) }
+  while ($d -lt -[math]::PI) { $d = $d + (2 * [math]::PI) }
+  $d = [math]::Abs($d)
+  if ($d -gt ([math]::PI / 2)) { $d = [math]::PI - $d }
+  return ($d -le (15 * [math]::PI / 180))
 }
 
-function Resolve-MemberZs {
-  param($Local, $Spec, $Index, [double]$Story)
-  $pts = $Local.pts
-  $n = 0
-  if ($null -ne $pts) { $n = [int]$pts.Count }
-  if ($n -lt 2) { return $null }
-  $cad = Get-CadZs $pts
-  if ($null -ne $cad) {
-    if (Test-ZsNeedHeight $cad $Story) { return ,$cad }
-    return $null
-  }
-  $wanted = @()
-  if ($null -ne $Spec) { $wanted = @(Get-PlanList (Get-PlanProp $Spec @("verts", "ends"))) }
-  $zs = New-Object 'double[]' $n
-  $fromMark = $false
-  for ($i = 0; $i -lt $n; $i++) {
-    $vx = [double]$pts[$i][0]
-    $vy = [double]$pts[$i][1]
-    $chosen = $null
-    if ($i -lt $wanted.Count -and $null -ne $wanted[$i]) {
-      $tid = [string](Get-PlanProp $wanted[$i] @("textId", "text"))
-      if ($tid -and $Index.ContainsKey($tid)) {
-        $mark = $Index[$tid]
-        if ([string]$mark.type -eq "text" -and $null -ne $mark.zMm) {
-          $dx = [double]$mark.x - $vx
-          $dy = [double]$mark.y - $vy
-          if (($dx * $dx + $dy * $dy) -le 6250000.0) { $chosen = [double]$mark.zMm }
-        }
-      }
-    }
-    if ($null -eq $chosen -and $null -ne $Local.elev -and $i -lt [int]$Local.elev.Count) {
-      $tid = [string]$Local.elev[$i]
-      if ($tid -and $Index.ContainsKey($tid)) {
-        $mark = $Index[$tid]
-        if ([string]$mark.type -eq "text" -and $null -ne $mark.zMm) { $chosen = [double]$mark.zMm }
-      }
-    }
-    if ($null -ne $chosen -and $chosen -ge -10000 -and $chosen -le 200000) {
-      $zs[$i] = $chosen
-      $fromMark = $true
-    } else {
-      $zs[$i] = $Story
-    }
-  }
-  if (-not $fromMark) { return $null }
-  if (-not (Test-ZsNeedHeight $zs $Story)) { return $null }
-  return ,$zs
-}
-
-function Test-SlopeHost {
-  param($Local)
-  if ($null -eq $Local) { return $false }
-  if ([string]$Local.type -eq "mline") { return $true }
-  if ([string]$Local.axis -eq "center") { return $true }
-  $layer = [string]$Local.layer
-  if ($layer -match '(?i)beam|梁') { return $true }
-  $pts = $Local.pts
-  if ($null -ne $pts -and [int]$pts.Count -ge 3) { return $true }
-  if ($null -ne (Get-CadZs $pts)) { return $true }
-  return $false
-}
-
-function Add-SlopeHints {
-  # 标高文字只贴到顶点。梁图层、中心线、折线和已有 Z 的线优先，避免尺寸引线把文字抢走。
-  param($Inventory, $Index)
-  if ($null -eq $Inventory -or $null -eq $Index) { return }
-  $texts = New-Object System.Collections.Generic.List[object]
-  $paths = New-Object System.Collections.Generic.List[object]
-  foreach ($entity in $Inventory.entities) {
-    $id = Get-InventoryId $entity
-    if (-not $id -or -not $Index.ContainsKey($id)) { continue }
+function Get-OpenSegments {
+  param($Index)
+  $segs = New-Object System.Collections.Generic.List[object]
+  foreach ($id in @($Index.Keys)) {
     $local = $Index[$id]
+    if ($null -eq $local) { continue }
     $type = [string]$local.type
-    if ($type -eq "text") {
-      if ($null -ne $local.zMm) {
-        $texts.Add(@{ id = $id; x = [double]$local.x; y = [double]$local.y }) | Out-Null
-      }
-      continue
-    }
+    if ($type -ne "line" -and $type -ne "polyline" -and $type -ne "mline") { continue }
     $closed = $false
     try { $closed = [bool]$local.closed } catch {}
     if ($closed) { continue }
-    if ($type -ne "line" -and $type -ne "polyline" -and $type -ne "mline") { continue }
     $pts = $local.pts
     if ($null -eq $pts -or [int]$pts.Count -lt 2) { continue }
-    $len = 0.0
     for ($i = 0; $i -lt ([int]$pts.Count - 1); $i++) {
-      $dx = [double]$pts[$i + 1][0] - [double]$pts[$i][0]
-      $dy = [double]$pts[$i + 1][1] - [double]$pts[$i][1]
-      $len += [math]::Sqrt($dx * $dx + $dy * $dy)
+      $x1 = [double]$pts[$i][0]
+      $y1 = [double]$pts[$i][1]
+      $x2 = [double]$pts[$i + 1][0]
+      $y2 = [double]$pts[$i + 1][1]
+      $dx = $x2 - $x1
+      $dy = $y2 - $y1
+      if (($dx * $dx + $dy * $dy) -lt 40000) { continue }
+      $segs.Add([pscustomobject]@{ id = [string]$id; x1 = $x1; y1 = $y1; x2 = $x2; y2 = $y2 }) | Out-Null
     }
-    if ($len -lt 200) { continue }
-    $cad = Get-CadZs $pts
-    if ($null -ne $cad -and $entity -is [System.Collections.IDictionary]) {
-      $arr = New-Object System.Collections.ArrayList
-      foreach ($z in @($cad)) { [void]$arr.Add([long][math]::Round([double]$z, 0)) }
-      $entity["z"] = $arr
-    }
-    $prefer = Test-SlopeHost $local
-    $paths.Add(@{ id = $id; pub = $entity; local = $local; pts = $pts; prefer = $prefer }) | Out-Null
   }
-  $textN = [int]$texts.Count
-  $pathN = [int]$paths.Count
-  if ($textN -eq 0 -or $pathN -eq 0) { return }
-  $pairs = New-Object System.Collections.Generic.List[object]
-  for ($pi = 0; $pi -lt $pathN; $pi++) {
-    $path = $paths[$pi]
-    $vn = [int]$path.pts.Count
-    for ($vi = 0; $vi -lt $vn; $vi++) {
-      $vx = [double]$path.pts[$vi][0]
-      $vy = [double]$path.pts[$vi][1]
-      for ($ti = 0; $ti -lt $textN; $ti++) {
-        $text = $texts[$ti]
-        $dx = [double]$text.x - $vx
-        $dy = [double]$text.y - $vy
-        $d2 = $dx * $dx + $dy * $dy
-        if ($d2 -gt 6250000.0) { continue }
-        # 梁、折线先占用文字。排序用整数键，避免大标量被当成字符串倒序。
-        $tier = 1
-        if ($path.prefer) { $tier = 0 }
-        $pairs.Add([pscustomobject]@{ tier = $tier; d2 = [long][math]::Round($d2, 0); pi = $pi; vi = $vi; ti = $ti }) | Out-Null
+  return ,$segs
+}
+
+function Get-RidgeLines {
+  param($Index)
+  $ridges = New-Object System.Collections.Generic.List[object]
+  $segs = Get-OpenSegments $Index
+  if ($null -eq $segs -or [int]$segs.Count -eq 0) { return ,$ridges }
+  $owners = @{}
+  foreach ($id in @($Index.Keys)) {
+    $local = $Index[$id]
+    if ($null -eq $local) { continue }
+    if ([string]$local.type -ne "text") { continue }
+    if ([string]$local.role -ne "ridge") { continue }
+    if ($null -eq $local.zMm) { continue }
+    $tx = [double]$local.x
+    $ty = [double]$local.y
+    $rot = 0.0
+    try { $rot = [double]$local.rot } catch {}
+    $bestId = $null
+    $bestD = 2500.0
+    foreach ($seg in $segs) {
+      if (-not (Test-TextParallel $rot $seg.x1 $seg.y1 $seg.x2 $seg.y2)) { continue }
+      $d = Get-DistPointSeg $tx $ty $seg.x1 $seg.y1 $seg.x2 $seg.y2
+      if ($d -lt $bestD) {
+        $bestD = $d
+        $bestId = [string]$seg.id
+      }
+    }
+    if (-not $bestId) { continue }
+    $prev = $owners[$bestId]
+    if ($null -eq $prev -or $bestD -lt [double]$prev.d) {
+      $owners[$bestId] = [pscustomobject]@{ d = $bestD; z = [double]$local.zMm }
+    }
+  }
+  foreach ($seg in $segs) {
+    if (-not $owners.ContainsKey([string]$seg.id)) { continue }
+    $own = $owners[[string]$seg.id]
+    $ridges.Add([pscustomobject]@{
+      id = [string]$seg.id; x1 = $seg.x1; y1 = $seg.y1; x2 = $seg.x2; y2 = $seg.y2; z = [double]$own.z
+    }) | Out-Null
+  }
+  return ,$ridges
+}
+
+function Get-RidgeCrossing {
+  param(
+    [double]$Ax, [double]$Ay, [double]$Bx, [double]$By,
+    [double]$Rx1, [double]$Ry1, [double]$Rx2, [double]$Ry2
+  )
+  $dx = $Bx - $Ax
+  $dy = $By - $Ay
+  $rx = $Rx2 - $Rx1
+  $ry = $Ry2 - $Ry1
+  $den = $dx * $ry - $dy * $rx
+  $beamLen = [math]::Sqrt($dx * $dx + $dy * $dy)
+  $ridgeLen = [math]::Sqrt($rx * $rx + $ry * $ry)
+  if ($beamLen -lt 50 -or $ridgeLen -lt 50) { return $null }
+  if (([math]::Abs($den) / ($beamLen * $ridgeLen)) -lt 0.087) { return $null }
+  $t = (($Rx1 - $Ax) * $ry - ($Ry1 - $Ay) * $rx) / $den
+  $u = (($Rx1 - $Ax) * $dy - ($Ry1 - $Ay) * $dx) / $den
+  if ($u -lt -0.02 -or $u -gt 1.02) { return $null }
+  $over = 0.0
+  if ($t -lt 0) { $over = -$t * $beamLen }
+  elseif ($t -gt 1) { $over = ($t - 1) * $beamLen }
+  if ($over -gt 300) { return $null }
+  return [pscustomobject]@{
+    t = $t; over = $over; x = ($Ax + $t * $dx); y = ($Ay + $t * $dy)
+  }
+}
+
+function New-SlopePts {
+  param([double]$X1, [double]$Y1, [double]$Z1, [double]$X2, [double]$Y2, [double]$Z2)
+  $out = New-Object System.Collections.ArrayList
+  $a = New-Object System.Collections.ArrayList
+  [void]$a.Add([math]::Round($X1, 1))
+  [void]$a.Add([math]::Round($Y1, 1))
+  [void]$a.Add([math]::Round($Z1, 1))
+  $b = New-Object System.Collections.ArrayList
+  [void]$b.Add([math]::Round($X2, 1))
+  [void]$b.Add([math]::Round($Y2, 1))
+  [void]$b.Add([math]::Round($Z2, 1))
+  [void]$out.Add($a)
+  [void]$out.Add($b)
+  return ,$out
+}
+
+function New-BeamPiece {
+  param($Beam, $Pts, [bool]$Slope)
+  $rise = 0.0
+  if (-not $Slope) {
+    try { $rise = [double]$Beam.rise } catch {}
+  }
+  return @{
+    pts = $Pts
+    w = $Beam.w
+    h = $Beam.h
+    rise = [math]::Round($rise, 1)
+    len = [math]::Round((Get-PointPathLength $Pts), 1)
+    steel = $Beam.steel
+    slope = $Slope
+  }
+}
+
+function Get-SegmentRidgePieces {
+  param($Beam, [double]$Ax, [double]$Ay, [double]$Bx, [double]$By, $Ridges, [double]$Story)
+  $best = $null
+  foreach ($ridge in $Ridges) {
+    $hit = Get-RidgeCrossing $Ax $Ay $Bx $By $ridge.x1 $ridge.y1 $ridge.x2 $ridge.y2
+    if ($null -eq $hit) { continue }
+    $dxA = $Ax - $hit.x
+    $dyA = $Ay - $hit.y
+    $dxB = $Bx - $hit.x
+    $dyB = $By - $hit.y
+    $dA = $dxA * $dxA + $dyA * $dyA
+    $dB = $dxB * $dxB + $dyB * $dyB
+    $onSeg = ($hit.t -ge 0 -and $hit.t -le 1 -and $dA -gt 2500 -and $dB -gt 2500)
+    $tier = 1
+    if ($onSeg) { $tier = 0 }
+    $mid = [math]::Abs($hit.t - 0.5)
+    $take = $false
+    if ($null -eq $best) { $take = $true }
+    elseif ($tier -lt $best.tier) { $take = $true }
+    elseif ($tier -eq $best.tier -and $hit.over -lt ($best.over - 1)) { $take = $true }
+    elseif ($tier -eq $best.tier -and [math]::Abs($hit.over - $best.over) -le 1 -and $mid -lt $best.mid) { $take = $true }
+    if ($take) {
+      $best = [pscustomobject]@{
+        tier = $tier; over = $hit.over; mid = $mid; x = $hit.x; y = $hit.y
+        z = [double]$ridge.z; onSeg = $onSeg; dA = $dA; dB = $dB
       }
     }
   }
-  $ordered = @($pairs | Sort-Object -Property tier, d2)
-  $usedT = @{}
-  $usedV = @{}
-  foreach ($pair in $ordered) {
-    if ($null -eq $pair) { continue }
-    $tk = [string]$pair.ti
-    $vk = [string]$pair.pi + ":" + [string]$pair.vi
-    if ($usedT.ContainsKey($tk) -or $usedV.ContainsKey($vk)) { continue }
-    $usedT[$tk] = $true
-    $usedV[$vk] = $true
-    $path = $paths[[int]$pair.pi]
-    if ($null -eq $path.slots) {
-      $vn = [int]$path.pts.Count
-      $slots = New-Object 'string[]' $vn
-      for ($s = 0; $s -lt $vn; $s++) { $slots[$s] = "" }
-      $path.slots = $slots
+  if ($null -eq $best) { return $null }
+  $list = New-Object System.Collections.Generic.List[object]
+  if ($best.onSeg) {
+    $list.Add((New-BeamPiece $Beam (New-SlopePts $Ax $Ay $Story $best.x $best.y $best.z) $true)) | Out-Null
+    $list.Add((New-BeamPiece $Beam (New-SlopePts $best.x $best.y $best.z $Bx $By $Story) $true)) | Out-Null
+  } else {
+    $fx = $Bx
+    $fy = $By
+    if ($best.dA -gt $best.dB) { $fx = $Ax; $fy = $Ay }
+    $list.Add((New-BeamPiece $Beam (New-SlopePts $best.x $best.y $best.z $fx $fy $Story) $true)) | Out-Null
+  }
+  return ,$list
+}
+
+function Get-BeamRidgePieces {
+  param($Beam, $Ridges, [double]$Story)
+  $pts = $null
+  if ($Beam -is [System.Collections.IDictionary]) { $pts = $Beam["pts"] }
+  if ($null -eq $pts -or [int]$pts.Count -lt 2) { return $null }
+  $n = [int]$pts.Count
+  if ($n -eq 2) {
+    $part = Get-SegmentRidgePieces $Beam ([double]$pts[0][0]) ([double]$pts[0][1]) ([double]$pts[1][0]) ([double]$pts[1][1]) $Ridges $Story
+    if ($null -eq $part) { return $null }
+    return ,$part
+  }
+  $all = New-Object System.Collections.Generic.List[object]
+  $hit = $false
+  for ($i = 0; $i -lt ($n - 1); $i++) {
+    $part = Get-SegmentRidgePieces $Beam ([double]$pts[$i][0]) ([double]$pts[$i][1]) ([double]$pts[$i + 1][0]) ([double]$pts[$i + 1][1]) $Ridges $Story
+    if ($null -eq $part) {
+      $flat = New-SlopePts ([double]$pts[$i][0]) ([double]$pts[$i][1]) 0 ([double]$pts[$i + 1][0]) ([double]$pts[$i + 1][1]) 0
+      $all.Add((New-BeamPiece $Beam $flat $false)) | Out-Null
+    } else {
+      $hit = $true
+      foreach ($piece in $part) { $all.Add($piece) | Out-Null }
     }
-    $path.slots[[int]$pair.vi] = [string]$texts[[int]$pair.ti].id
   }
-  $bound = 0
-  for ($pi = 0; $pi -lt $pathN; $pi++) {
-    $path = $paths[$pi]
-    if ($null -eq $path.slots) { continue }
-    $any = $false
-    foreach ($slot in @($path.slots)) { if ($slot) { $any = $true; break } }
-    if (-not $any) { continue }
-    $path.local.elev = $path.slots
-    if ($path.pub -is [System.Collections.IDictionary]) { $path.pub["elev"] = @($path.slots) }
-    $bound = $bound + 1
+  if (-not $hit) { return $null }
+  return ,$all
+}
+
+function Apply-RidgeSlopeBeams {
+  param($Beams, $Index, [double]$Story)
+  $ridges = Get-RidgeLines $Index
+  if ($null -eq $ridges -or [int]$ridges.Count -eq 0) { return 0 }
+  $next = New-Object System.Collections.Generic.List[object]
+  $slopeCount = 0
+  foreach ($beam in $Beams) {
+    $pieces = Get-BeamRidgePieces -Beam $beam -Ridges $ridges -Story $Story
+    if ($null -eq $pieces) {
+      $next.Add($beam) | Out-Null
+      continue
+    }
+    foreach ($piece in $pieces) {
+      $next.Add($piece) | Out-Null
+      $isSlope = $false
+      if ($piece -is [System.Collections.IDictionary] -and $piece.Contains("slope") -and $piece["slope"] -eq $true) { $isSlope = $true }
+      if ($isSlope) { $slopeCount = $slopeCount + 1 }
+    }
   }
-  if ($bound -gt 0) {
+  $Beams.Clear()
+  foreach ($item in $next) { [void]$Beams.Add($item) }
+  if ($slopeCount -gt 0) {
     $tag = ""
     if (Get-Command Get-BuildTag -ErrorAction SilentlyContinue) { $tag = Get-BuildTag + " " }
-    Write-Host ($tag + "坡屋顶：已把标高文字贴到 " + $bound + " 条线的顶点")
+    Write-Host ($tag + "斜梁 " + $slopeCount + " 根：交点用屋脊标高，另一端用层高 " + $Story + " mm")
   }
+  return $slopeCount
 }
 
 function Test-ColumnReaches {
@@ -826,8 +891,8 @@ function Get-StructureRuleText {
 
 分析顺序（必须按这个顺序想，再写 JSON）：
 1. 先看图层名、图块名，整张图是否整体符合下面的梁、柱、墙、楼板图层规则。
-2. 再挑梁。梁定位线以图元清单为准，不要自己算中点、不要改坐标。
-3. 再挑柱、墙、楼板；有坡屋顶时再挑 slopeBeams。
+2. 再挑全部梁中心定位线，这一步与屋脊线无关。梁定位线以图元清单为准，不要自己算中点、不要改坐标。
+3. 再挑柱、墙、楼板。不要输出 slopeBeams。
 4. 最后写 summary：规则适用时写命中了哪些规则；不适用时写按结构关系做了什么判断。
 
 梁图层：
@@ -841,12 +906,12 @@ function Get-StructureRuleText {
 - 两根平行线的间距小于 190 mm：一定是两根不同的梁（错台、并排梁、墙垛旁的短梁很常见）。必须各选各的 id，各建一根梁；禁止合并成一根，禁止取两线中点当定位线，禁止只选其中一根代表两根。
 - 间距大于等于 190 mm 且清单里已经出现 axis 为 center 的图元时：只选那些中心线 id。
 - 错台、墙垛、悬挑附近几根靠得很近的平行线，即使方向相同、投影重叠，只要间距小于 190 mm，就按多根梁处理。
-- 一根梁在 beams 或 slopeBeams 里只输出一个 id。不要为同一根梁输出两个边线 id。
+- 一根梁在 beams 里只输出一个 id。不要为同一根梁输出两个边线 id。不要输出 slopeBeams。
 
 梁截面：
 - width 是梁宽，depth 是梁高，单位毫米。附近文字是两个数字时，200x500 表示宽 x 高；是四个数字的型钢规格时，400x200x8x13 表示高 400、宽 200，也就是 depth 取第 1 个数字、width 取第 2 个数字。( +0.020 ) 表示 rise 为 20。
 - 没有标注时：axis 为 center 的用它自带的 width；mline 可用 scale 作 width；其它线 width 用 200，depth 用 500。
-- 钢梁要在 beams 或 slopeBeams 项里加 "steel":true。图层名含 gl 或 GL 的梁一定是钢梁；梁中线附近有四个数字型钢规格文字的梁也是钢梁。其它梁加 "steel":false。
+- 钢梁要在 beams 项里加 "steel":true。图层名含 gl 或 GL 的梁一定是钢梁；梁中线附近有四个数字型钢规格文字的梁也是钢梁。其它梁加 "steel":false。
 - 钢梁尺寸文字：由四个数字组成，例如 400x200x8x13、HN400*200*8*13、400×200×8×13。它是截面尺寸，不要当成标注、轴号。第 1 个数字是 depth，第 2 个是 width。这种文字出现在哪条梁定位线附近，那条梁就是钢梁。
 
 柱图层：a数字-cols 或 s数字-cols，数字可以没有，例如 S-COLS。闭合 polyline 面积在 10000 到 10000000 之间，以及圆。不要把轴号小圆当成柱。
@@ -857,14 +922,17 @@ id 必须来自输入，禁止编造 id 或坐标。
 storyMm 和 slabThickMm 采用用户给出的默认值，除非文字明确只给出一个标准层高或板厚。
 不要选择尺寸线、轴号、填充边界、图框和标题栏。
 
-坡屋顶斜梁：
-- 和水平梁使用同一套梁图层，不需要单独图层。平面上的折线是斜梁的水平投影。顶点标高不同的放进 slopeBeams，不要放进 beams。各顶点标高相同的仍放 beams。斜梁的定位线规则与水平梁相同：选中哪个 id 就用哪个图元的坐标。
-- 图元上的 z 是顶点已有的毫米标高，高差大于 50 时照抄，不要改。elev 与顶点一一对应（直线的 elev[0] 是 a 端，elev[1] 是 b 端），值是贴在该顶点上的标高文字 id。文字上的 zMm 是绝对毫米：15,850(脊) 和 15.850(脊) 都是 15850，不要加到 storyMm 上。role 为 ridge 是屋脊，eave 是檐口，level 是普通节点标高。
-- slopeBeams 每项：{"id":"p12","width":200,"depth":500,"steel":false,"verts":[{"zMm":3000,"role":"eave","textId":""},{"zMm":15850,"role":"ridge","textId":"t8"}]}。verts 与 pts 或 elev 顺序一致，折线中间的屋脊点也要写。textId 用该顶点 elev 里的 id。没有标高文字的一端 textId 为空，zMm 等于用户给出的层高。钢筋、梁号、纯尺寸数字不是标高。截面规则与水平梁相同。
+坡屋顶斜梁（你只选梁中心线 id，分段和标高由程序计算）：
+- 第一步与屋脊线无关：把所有梁中心定位线放进 beams。带 axis:center 的选这个中心线 id；没有 axis 的线按自身坐标。间距小于 190 mm 的平行线各选各的 id。
+- 只认带「屋脊」的文字，例如 15.850(屋脊)。15.850 按米是 15850 mm，是绝对标高，不要加到层高上。这种文字和它旁边的屋脊线都不是梁，不要选成梁、柱或截面。
+- 屋脊线是该文字 2500 mm 内、与文字方向平行、距离最近的那条线。程序会用这条线处理第二步，你不要改梁的定位线。
+- 第二步由程序做：梁中心线与屋脊线相交时，在交点分成两段。交点高度用屋脊标高，另一端高度用用户给出的层高。
+- 若梁中心线与屋脊线不相交，程序把中心线两侧向外各延长不超过 300 mm。延长后有交点时，新定位线是交点到较远的那个原端点。交点用屋脊标高，另一端用层高。
+- 这些梁在 JSON 里仍然只输出原来的那一个中心线 id，放进 beams。不要拆成两个 id，不要输出 slopeBeams，不要输出高度或 verts。
 
 整张图完全不符合上面的预定规则时，必须自行判断，并思考这套结构是否合理：
 - 先看图层名、图块名和文字是否整体对得上梁、柱、墙、楼板规则。只有少量图元对不上时，仍按规则处理能对上的部分，再用几何补全其余构件。
-- 如果整张图都不是这套图层体系，就不要因为图层名不像 s-beam、s-cols、s-wall 而放弃。根据构件关系判断：柱是较小的支撑，通常落在梁的交点或端部；梁是连接柱或墙的线状构件，跨度和截面要像能承受楼盖的梁，定位线用该图元自己的坐标；间距小于 190 mm 的平行线仍按多根梁各选各的 id；连接檐口和屋脊、两端标高不同的折线是斜梁；墙是细长的竖向构件，不要把轴线、尺寸线或整层外框当成墙；楼板覆盖由这些梁、柱、墙围成的平面。
+- 如果整张图都不是这套图层体系，就不要因为图层名不像 s-beam、s-cols、s-wall 而放弃。根据构件关系判断：柱是较小的支撑，通常落在梁的交点或端部；梁是连接柱或墙的线状构件，跨度和截面要像能承受楼盖的梁，定位线用该图元自己的坐标；间距小于 190 mm 的平行线仍按多根梁各选各的 id；会和 15.850(屋脊) 所标屋脊线相交的梁中心线仍放进 beams，不要输出 slopeBeams；墙是细长的竖向构件，不要把轴线、尺寸线或整层外框当成墙；楼板覆盖由这些梁、柱、墙围成的平面。
 - 截面优先用附近尺寸文字。没有文字时，选择在常见结构范围里说得通的宽度和高度，不要把明显是标注、轴号、填充或图框的图元选进来。
 - summary 要写明依据。规则适用时说明命中了哪些规则；规则不适用时说明图纸不符合预定规则，以及按结构关系做了什么判断。
 '@
@@ -881,19 +949,20 @@ function New-DeepSeekBody {
 - 没有 axis 的线本身就是定位线。
 - 两根平行线间距小于 190 mm 时，一定是两根不同的梁，必须各选各的 id，禁止合并或取中线。
 
-图纸符合规则时按规则归类。图纸整体不符合预定规则时，不要硬套图层名，要自行判断哪些图元是梁、柱、墙、楼板，坡屋顶折线判断为斜梁，并思考这样的结构布置是否合理。id 仍然只能来自清单。标高只引用清单里的文字或顶点 z，不要编造。
+图纸符合规则时按规则归类。图纸整体不符合预定规则时，不要硬套图层名，要自行判断哪些图元是梁、柱、墙、楼板，并思考这样的结构布置是否合理。id 仍然只能来自清单。
+看到 15.850(屋脊) 时：它旁边最近的平行线是屋脊线，不是梁。第一步先把全部梁中心线放进 beams，与屋脊无关。第二步的相交、分成两段、两侧延长 300 mm 和两端标高都由程序计算。不要输出 slopeBeams，不要编造标高。
 只输出一个 JSON 对象，不要 Markdown，不要解释。格式：
-{"summary":"一两句中文，说明依据","storyMm":3000,"slabThickMm":130,"beams":[{"id":"m1","width":200,"depth":500,"rise":0,"steel":false}],"slopeBeams":[{"id":"p12","width":200,"depth":500,"steel":false,"verts":[{"zMm":3000,"role":"eave","textId":""},{"zMm":15850,"role":"ridge","textId":"t8"}]}],"columns":[{"id":"p1"}],"walls":[{"id":"p2"}],"slabRect":[0,0,1000,1000]}
+{"summary":"一两句中文，说明依据","storyMm":3000,"slabThickMm":130,"beams":[{"id":"m1","width":200,"depth":500,"rise":0,"steel":false}],"columns":[{"id":"p1"}],"walls":[{"id":"p2"}],"slabRect":[0,0,1000,1000]}
 $rules
 "@
   $user = @"
 请按下面步骤分析，并只输出一个 JSON：
 1. 判断整张图是否符合预定图层规则。
-2. 挑选梁：优先选 axis 为 center 的图元；没有 axis 的线按它自己的坐标作为定位线；间距小于 190 mm 的平行线各选各的 id，不要合并。
-3. 再挑选柱、墙、楼板；有坡屋顶时再填 slopeBeams。
+2. 挑选全部梁中心定位线，这一步与屋脊线无关：优先选 axis 为 center 的图元；没有 axis 的线按它自己的坐标作为定位线；间距小于 190 mm 的平行线各选各的 id，不要合并。
+3. 再挑选柱、墙、楼板。15.850(屋脊) 旁边最近的平行线是屋脊线，不要选成梁。会和屋脊线相交、或两侧向外延长不超过 300 mm 后相交的梁，仍只把原来的中心线 id 放进 beams。不要输出高度，不要输出 slopeBeams。
 4. summary 用一两句中文说明依据。
 
-用户指定的默认层高是 $Story mm，默认板厚是 $SlabThick mm。斜梁端点没有标高文字时，这一端的 zMm 用这个层高。
+用户指定的默认层高是 $Story mm，默认板厚是 $SlabThick mm。程序用这个层高作为斜梁不在屋脊交点那一端的高度，交点用 15.850(屋脊) 的标高。你不要在 JSON 里写这些高度。
 
 $rules
 
@@ -967,13 +1036,9 @@ function Convert-StructurePlan {
     $id = [string](Get-PlanProp $item @("id"))
     if ($id) { $beamWant[$id] = $item }
   }
-  $slopeWant = @{}
   foreach ($item in (Get-PlanList (Get-PlanProp $Plan @("slopeBeams", "slope_beams")))) {
     $id = [string](Get-PlanProp $item @("id"))
-    if ($id) {
-      $slopeWant[$id] = $item
-      if ($beamWant.ContainsKey($id)) { $beamWant.Remove($id) }
-    }
+    if ($id -and -not $beamWant.ContainsKey($id)) { $beamWant[$id] = $item }
   }
   $colWant = @{}
   foreach ($item in (Get-PlanList (Get-PlanProp $Plan @("columns")))) {
@@ -998,7 +1063,6 @@ function Convert-StructurePlan {
   }
 
   $selections = New-Object System.Collections.Generic.List[object]
-  foreach ($id in @($slopeWant.Keys)) { $selections.Add([pscustomobject]@{ Id = $id; Role = "slope"; Raw = $slopeWant[$id] }) | Out-Null }
   foreach ($id in @($beamWant.Keys)) { $selections.Add([pscustomobject]@{ Id = $id; Role = "beam"; Raw = $beamWant[$id] }) | Out-Null }
   foreach ($id in @($colWant.Keys)) { $selections.Add([pscustomobject]@{ Id = $id; Role = "column"; Raw = $colWant[$id] }) | Out-Null }
   foreach ($id in @($wallWant.Keys)) { $selections.Add([pscustomobject]@{ Id = $id; Role = "wall"; Raw = $wallWant[$id] }) | Out-Null }
@@ -1029,7 +1093,7 @@ function Convert-StructurePlan {
     $local = $Index[$id]
     $used[$id] = $true
 
-    if ($sel.Role -eq "beam" -or $sel.Role -eq "slope") {
+    if ($sel.Role -eq "beam") {
       try {
         if ($beams.Count -ge 500) { continue }
         if ($local.replacedBy) {
@@ -1058,20 +1122,8 @@ function Convert-StructurePlan {
           if ($steelRaw -eq $true) { $steel = $true }
           elseif (([string]$steelRaw).Trim().ToLowerInvariant() -eq 'true' -or ([string]$steelRaw).Trim() -eq '1') { $steel = $true }
         }
-        $memberZs = Resolve-MemberZs -Local $local -Spec $sel.Raw -Index $Index -Story $levelMm
-        $isSlope = $false
-        if ($null -ne $memberZs) {
-          $zn = 0
-          try { $zn = [int]$memberZs.Length } catch {}
-          if ($zn -ge [int]$local.pts.Count) {
-            $pts = Copy-PointsWithZ -Pts $local.pts -Zs $memberZs
-            $isSlope = $true
-            $rise = 0
-          }
-        }
         $len = [math]::Round((Get-PointPathLength $pts), 1)
-        if ($isSlope) { $slopeCount = $slopeCount + 1 }
-        $beams.Add(@{ pts = $pts; w = [math]::Round($width, 1); h = [math]::Round($depth, 1); rise = [math]::Round($rise, 1); len = $len; steel = $steel; slope = $isSlope }) | Out-Null
+        $beams.Add(@{ pts = $pts; w = [math]::Round($width, 1); h = [math]::Round($depth, 1); rise = [math]::Round($rise, 1); len = $len; steel = $steel; slope = $false }) | Out-Null
         for ($pi = 0; $pi -lt $pts.Count; $pi++) {
           $p = $pts[$pi]
           if ([double]$p[0] -lt $minX) { $minX = [double]$p[0] }
@@ -1120,10 +1172,23 @@ function Convert-StructurePlan {
     }
   }
 
+  $slopeCount = Apply-RidgeSlopeBeams -Beams $beams -Index $Index -Story $levelMm
+  foreach ($beam in $beams) {
+    $bpts = $null
+    if ($beam -is [System.Collections.IDictionary]) { $bpts = $beam["pts"] }
+    if ($null -eq $bpts) { continue }
+    foreach ($p in $bpts) {
+      if ($null -eq $p) { continue }
+      if ([double]$p[0] -lt $minX) { $minX = [double]$p[0] }
+      if ([double]$p[1] -lt $minY) { $minY = [double]$p[1] }
+      if ([double]$p[0] -gt $maxX) { $maxX = [double]$p[0] }
+      if ([double]$p[1] -gt $maxY) { $maxY = [double]$p[1] }
+    }
+  }
   Set-ColumnTops -Columns $columns -Beams $beams -Story $levelMm
   if ($slopeCount -gt 0) {
     if ($summary) { $summary += " " }
-    $summary += "斜梁 $slopeCount 根。端点标高取顶点 Z 或 2500 mm 内的标高文字，没有文字的一端用层高 $levelMm mm。"
+    $summary += "斜梁 $slopeCount 根。梁中心线与屋脊线相交时在交点分成两段；否则两侧向外延长不超过 300 mm，新定位线是交点到较远端点。交点用屋脊标高，另一端用层高 $levelMm mm。"
   }
 
   if ($beams.Count -eq 0 -and $columns.Count -eq 0 -and $walls.Count -eq 0) {
@@ -1182,7 +1247,6 @@ function Convert-StructurePlan {
 function Invoke-DeepSeekStructure {
   param($Inventory, $Index, $SpaceBoxes, [string]$ApiKey, [double]$Story, [double]$SlabThick, [scriptblock]$OnProgress)
   Merge-BeamEdgePairs -Inventory $Inventory -Index $Index | Out-Null
-  Add-SlopeHints -Inventory $Inventory -Index $Index
   $entityCount = 0
   $layerCount = 0
   # 这里不能用 @() 包一层取 Count：PS 5.1 对 List[object] 这样取会抛
@@ -1203,7 +1267,7 @@ function Invoke-DeepSeekStructure {
   try {
   foreach ($think in @($true, $false)) {
     $step = "DeepSeek 分析"
-    $detail = "已提交 $entityCount 个图元、$layerCount 个图层和默认结构规则，约 $wan 万字。模型只选 id 和截面，不改定位线；间距小于 190 mm 的平行线按多根梁处理。符合规则就按规则归类；整张图对不上规则时，按结构布置是否合理自行判断。这一步通常要几分钟。"
+    $detail = "已提交 $entityCount 个图元、$layerCount 个图层和默认结构规则，约 $wan 万字。模型只选梁中心线 id 和截面，不改定位线，也不输出斜梁高度。有 15.850(屋脊) 时，相交分段和两侧延长 300 mm 由程序计算。这一步通常要几分钟。"
     if (-not $think) {
       $step = "DeepSeek 重试"
       $detail = "第一次没有返回完整 JSON。正在关闭思考模式，把同一份图元和默认规则再分析一次。"
@@ -1237,6 +1301,6 @@ function Invoke-DeepSeekStructure {
   } finally {
     if (Get-Command Stop-ProgressHeartbeat -ErrorAction SilentlyContinue) { Stop-ProgressHeartbeat }
   }
-  if ($OnProgress) { & $OnProgress "整理结果" "DeepSeek 已返回。正在按图元编号还原梁、斜梁、柱、墙和楼板，并把标高文字或顶点 Z 接到斜梁端点。" }
+  if ($OnProgress) { & $OnProgress "整理结果" "DeepSeek 已返回。正在按图元编号还原梁、柱、墙和楼板。若有屋脊线，梁中心线与它相交时在交点分成两段；否则两侧向外延长不超过 300 mm。" }
   return Convert-StructurePlan -Plan $plan -Index $Index -SpaceBoxes $SpaceBoxes -Story $Story -SlabThick $SlabThick -Usage $usage -Thinking $thinking
 }
