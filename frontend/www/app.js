@@ -182,6 +182,7 @@ function showResult(data) {
     ["墙", counts.walls],
     ["楼板", counts.slab]
   ];
+  if (Number(counts.slope) > 0) rows.push(["斜梁", counts.slope]);
   const known = rows.every(([, value]) =>
     value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value))
   );

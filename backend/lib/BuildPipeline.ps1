@@ -269,6 +269,18 @@ function Get-ModelCounts {
     if (-not [double]::TryParse(([string]$value).Trim(), [ref]$number)) { return $null }
     $counts[$name] = [int]$number
   }
+  $slopeValue = $null
+  if ($Result -is [System.Collections.IDictionary]) {
+    if ($Result.Contains("slope")) { $slopeValue = $Result["slope"] }
+  } else {
+    $slopeValue = Get-PlanProp $Result @("slope")
+  }
+  if ($null -ne $slopeValue -and ([string]$slopeValue).Trim() -ne "") {
+    $slopeNumber = 0.0
+    if ([double]::TryParse(([string]$slopeValue).Trim(), [ref]$slopeNumber)) {
+      $counts["slope"] = [int]$slopeNumber
+    }
+  }
   return $counts
 }
 
@@ -408,6 +420,9 @@ function Invoke-StructureBuild {
   $sketchupDetail = "分析已经完成，正在 SketchUp 里创建梁、柱、墙和楼板，并保存 skp。"
   if ($planCounts) {
     $sketchupDetail = "分析已经完成：梁 $($planCounts.beams)、柱 $($planCounts.columns)、墙 $($planCounts.walls)。正在 SketchUp 里创建这些构件，并保存 skp。"
+    if ($planCounts.ContainsKey("slope") -and [int]$planCounts["slope"] -gt 0) {
+      $sketchupDetail = "分析已经完成：梁 $($planCounts.beams)（含斜梁 $($planCounts.slope)）、柱 $($planCounts.columns)、墙 $($planCounts.walls)。正在 SketchUp 里创建这些构件，并保存 skp。"
+    }
   }
   if ($OnProgress) { & $OnProgress "写入 SketchUp" $sketchupDetail }
   $rubyScript = (Join-Path $Root "ruby\build.rb") -replace '\\', '/'

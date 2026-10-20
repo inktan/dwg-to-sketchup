@@ -38,6 +38,27 @@ def clean_ring(pts)
   out
 end
 
+def beam_end_z(pt, fallback)
+  return fallback if pt.nil? || pt.length < 3
+  pt[2].to_f
+end
+
+def place_beam(group, x1, y1, z1, x2, y2, z2)
+  dx = x2 - x1
+  dy = y2 - y1
+  dz = z2 - z1
+  plan = Math.hypot(dx, dy)
+  return nil if plan < 50.0
+  axis = Math.hypot(plan, dz)
+  return nil if axis < 50.0
+  group.transform!(
+    Geom::Transformation.translation([x1.mm, y1.mm, z1.mm]) *
+    Geom::Transformation.rotation(ORIGIN, Z_AXIS, Math.atan2(dy, dx)) *
+    Geom::Transformation.rotation(ORIGIN, Y_AXIS, -Math.atan2(dz, plan))
+  )
+  axis
+end
+
 def extrude_ring(entities, pts, z0_mm, height_mm)
   ring = clean_ring(pts)
   return nil if ring.length < 3
@@ -95,11 +116,13 @@ begin
   model.definitions.purge_unused
 
   layer_beam = tag_for(model, '结构-梁')
+  layer_slope = tag_for(model, '结构-斜梁')
   layer_col = tag_for(model, '结构-柱')
   layer_wall = tag_for(model, '结构-墙')
   layer_slab = tag_for(model, '结构-楼板')
   layer_steel = tag_for(model, '结构-钢梁')
   mat_beam = material_for(model, '梁-混凝土', [79, 109, 122], 1.0)
+  mat_slope = material_for(model, '梁-坡屋面', [62, 122, 92], 1.0)
   mat_steel = material_for(model, '梁-钢', [146, 152, 160], 1.0)
   mat_col = material_for(model, '柱-混凝土', [90, 94, 99], 1.0)
   mat_wall = material_for(model, '墙-混凝土', [196, 184, 166], 1.0)
@@ -119,29 +142,31 @@ begin
   slab_g.name = '楼板'
 
   beam_n = 0
+  slope_n = 0
   data['beams'].each_with_index do |beam, i|
     pts = beam['pts']
     width = beam['w'].to_f
     depth = beam['h'].to_f
     rise = beam['rise'].to_f
     z_top = story + rise
+    steel = beam['steel'] == true
     (0...(pts.length - 1)).each do |k|
       x1 = pts[k][0].to_f
       y1 = pts[k][1].to_f
       x2 = pts[k + 1][0].to_f
       y2 = pts[k + 1][1].to_f
-      len = Math.hypot(x2 - x1, y2 - y1)
-      next if len < 50.0
+      z1 = beam_end_z(pts[k], z_top)
+      z2 = beam_end_z(pts[k + 1], z_top)
       g = beams_g.entities.add_group
-      steel = beam['steel'] == true
       hw = width.mm / 2.0
+      axis = Math.hypot(Math.hypot(x2 - x1, y2 - y1), z2 - z1)
       if steel
         face = add_steel_face(g.entities, width, depth)
       else
         face = g.entities.add_face(
           Geom::Point3d.new(0, -hw, -depth.mm),
-          Geom::Point3d.new(len.mm, -hw, -depth.mm),
-          Geom::Point3d.new(len.mm, hw, -depth.mm),
+          Geom::Point3d.new(axis.mm, -hw, -depth.mm),
+          Geom::Point3d.new(axis.mm, hw, -depth.mm),
           Geom::Point3d.new(0, hw, -depth.mm)
         )
       end
@@ -151,19 +176,27 @@ begin
       end
       if steel
         face.reverse! if face.normal.x < 0
-        face.pushpull(len.mm)
+        face.pushpull(axis.mm)
       else
         face.reverse! if face.normal.z < 0
         face.pushpull(depth.mm)
       end
-      g.transform!(
-        Geom::Transformation.translation([x1.mm, y1.mm, z_top.mm]) *
-        Geom::Transformation.rotation(ORIGIN, Z_AXIS, Math.atan2(y2 - y1, x2 - x1))
-      )
+      placed = place_beam(g, x1, y1, z1, x2, y2, z2)
+      if placed.nil?
+        g.erase!
+        next
+      end
+      sloped = beam['slope'] == true && ((z1 - z2).abs > 50.0 || (z1 - z_top).abs > 50.0)
       if steel
         g.name = format('钢梁_%03d', i + 1)
         g.layer = layer_steel
         g.material = mat_steel
+        slope_n += 1 if sloped
+      elsif sloped
+        g.name = format('斜梁_%03d', i + 1)
+        g.layer = layer_slope
+        g.material = mat_slope
+        slope_n += 1
       else
         g.name = format('梁_%03d', i + 1)
         g.layer = layer_beam
@@ -178,16 +211,20 @@ begin
     g = cols_g.entities.add_group
     ok = false
     if col['kind'] == 'circle'
+      top = col['top'] ? col['top'].to_f : story
+      top = story if top < 1.0
       center = Geom::Point3d.new(col['c'][0].to_f.mm, col['c'][1].to_f.mm, 0)
       edges = g.entities.add_circle(center, Z_AXIS, col['r'].to_f.mm, 24)
       face = g.entities.add_face(edges)
       if face
         face.reverse! if face.normal.z < 0
-        face.pushpull(story.mm)
+        face.pushpull(top.mm)
         ok = true
       end
     else
-      ok = extrude_ring(g.entities, col['pts'], 0, story)
+      top = col['top'] ? col['top'].to_f : story
+      top = story if top < 1.0
+      ok = extrude_ring(g.entities, col['pts'], 0, top)
     end
     if ok
       g.name = format('柱_%03d', i + 1)
@@ -261,7 +298,7 @@ begin
   model.selection.add(inst)
   model.active_view.zoom(inst)
 
-  write_result(result_path, ok: true, beams: beam_n, columns: col_n, walls: wall_n, slab: 1, bytes: File.size(skp_path))
+  write_result(result_path, ok: true, beams: beam_n, slope: slope_n, columns: col_n, walls: wall_n, slab: 1, bytes: File.size(skp_path))
 rescue StandardError => e
   model.abort_operation if started
   write_result(result_path, ok: false, error: "#{e.class}: #{e.message}")

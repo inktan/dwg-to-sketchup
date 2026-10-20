@@ -12,13 +12,18 @@ function Get-ZwcadApp {
 }
 
 function Convert-PolyPoints {
-  param($Entity)
+  param($Entity, [bool]$Force3 = $false)
   $coords = @($Entity.Coordinates)
+  $elev = 0.0
+  try { $elev = [double]$Entity.Elevation } catch {}
   $step = 2
-  if ($coords.Length -ge 3 -and ($coords.Length % 3) -eq 0 -and ($coords.Length % 2) -ne 0) { $step = 3 }
+  if ($Force3 -and $coords.Length -ge 3 -and ($coords.Length % 3) -eq 0) { $step = 3 }
+  elseif ($coords.Length -ge 3 -and ($coords.Length % 3) -eq 0 -and ($coords.Length % 2) -ne 0) { $step = 3 }
   $pts = New-Object System.Collections.Generic.List[object]
   for ($i = 0; $i + 1 -lt $coords.Length; $i += $step) {
-    $pts.Add(@([double]$coords[$i], [double]$coords[$i + 1]))
+    $z = $elev
+    if ($step -eq 3 -and ($i + 2) -lt $coords.Length) { $z = [double]$coords[$i + 2] }
+    $pts.Add(@([double]$coords[$i], [double]$coords[$i + 1], $z))
   }
   if ($pts.Count -ge 2) {
     $a = $pts[0]
@@ -32,15 +37,29 @@ function Convert-PolyPoints {
 
 function Get-CadPoint {
   param($Point)
+  $point3 = Get-CadPoint3 $Point
+  if ($null -eq $point3) { return $null }
+  return @([double]$point3[0], [double]$point3[1])
+}
+
+function Get-CadPoint3 {
+  param($Point)
   if ($null -eq $Point) { return $null }
   if ($Point -is [System.Array]) {
-    if ($Point.Length -ge 2) { return @([double]$Point[0], [double]$Point[1]) }
+    if ($Point.Length -ge 2) {
+      $z = 0.0
+      if ($Point.Length -ge 3) { $z = [double]$Point[2] }
+      return @([double]$Point[0], [double]$Point[1], $z)
+    }
     return $null
   }
   try {
     $x = $Point.X
     $y = $Point.Y
-    if ($null -ne $x -and $null -ne $y) { return @([double]$x, [double]$y) }
+    if ($null -eq $x -or $null -eq $y) { return $null }
+    $z = 0.0
+    try { $z = [double]$Point.Z } catch {}
+    return @([double]$x, [double]$y, $z)
   } catch {}
   return $null
 }
@@ -50,7 +69,9 @@ function Convert-MlinePoints {
   $coords = @($Entity.Coordinates)
   $pts = New-Object System.Collections.Generic.List[object]
   for ($i = 0; $i + 1 -lt $coords.Length; $i += 3) {
-    $pts.Add(@([double]$coords[$i], [double]$coords[$i + 1]))
+    $z = 0.0
+    if (($i + 2) -lt $coords.Length) { $z = [double]$coords[$i + 2] }
+    $pts.Add(@([double]$coords[$i], [double]$coords[$i + 1], $z))
   }
   return $pts
 }
@@ -154,8 +175,8 @@ function Read-CadContainer {
         try { $scale = [double]$e.MLineScale } catch {}
         $seen.mline++
         $mlines.Add(@{ pts = $pts; len = $len; scale = $scale; layer = $layer }) | Out-Null
-      } elseif ($kind -eq "AcDbPolyline") {
-        $pts = Convert-PolyPoints $e
+      } elseif ($kind -eq "AcDbPolyline" -or $kind -eq "AcDb2dPolyline" -or $kind -eq "AcDb3dPolyline") {
+        $pts = Convert-PolyPoints $e -Force3:($kind -eq "AcDb3dPolyline")
         if ($pts.Count -lt 2) { continue }
         $isClosed = $false
         try { $isClosed = [bool]$e.Closed } catch {}
@@ -172,8 +193,8 @@ function Read-CadContainer {
           $opens.Add(@{ pts = $pts; len = $len; layer = $layer }) | Out-Null
         }
       } elseif ($kind -eq "AcDbLine") {
-        $p1 = Get-CadPoint $e.StartPoint
-        $p2 = Get-CadPoint $e.EndPoint
+        $p1 = Get-CadPoint3 $e.StartPoint
+        $p2 = Get-CadPoint3 $e.EndPoint
         if (-not $p1 -or -not $p2) { continue }
         $dx = $p2[0] - $p1[0]
         $dy = $p2[1] - $p1[1]
@@ -280,7 +301,7 @@ function Read-CadContainer {
       type = "polyline"; space = $SpaceName; layer = $item.layer; closed = $false
       length = (ConvertTo-InventoryNum ([double]$item.len)); n = $item.pts.Count
     }
-    if ($item.pts.Count -le 6) { $pub["pts"] = Copy-PointList $item.pts }
+    if ($item.pts.Count -le 12) { $pub["pts"] = Copy-PointList $item.pts }
     else { $pub["bbox"] = @((ConvertTo-InventoryNum $box[0]), (ConvertTo-InventoryNum $box[1]), (ConvertTo-InventoryNum $box[2]), (ConvertTo-InventoryNum $box[3])) }
     Add-CadPublic $Bag "p" $pub @{
       type = "polyline"; space = $SpaceName; pts = $item.pts; closed = $false; scale = 0; layer = $item.layer
@@ -318,13 +339,24 @@ function Read-CadContainer {
   foreach ($item in @($keepT)) {
     if ($null -eq $item) { continue }
     Expand-Bounds $bounds $item.x $item.y $item.x $item.y
-    Add-CadPublic $Bag "t" @{
+    $textPub = @{
       type = "text"; space = $SpaceName; layer = $item.layer
       text = $item.text
       x = (ConvertTo-InventoryNum $item.x)
       y = (ConvertTo-InventoryNum $item.y)
       rot = [math]::Round([double]$item.rot, 4)
-    } $null | Out-Null
+    }
+    $textLocal = $null
+    $parsedElev = Parse-ElevationText $item.text
+    if ($null -ne $parsedElev) {
+      $textPub["zMm"] = $parsedElev.zMm
+      $textPub["role"] = [string]$parsedElev.role
+      $textLocal = @{
+        type = "text"; space = $SpaceName; x = [double]$item.x; y = [double]$item.y
+        zMm = [double]$parsedElev.zMm; role = [string]$parsedElev.role; text = [string]$item.text
+      }
+    }
+    Add-CadPublic $Bag "t" $textPub $textLocal | Out-Null
     $kept.text++
   }
   foreach ($item in @($keepI)) {

@@ -72,18 +72,29 @@ def add_solid(doc, file3dm, brep, name, rgb, layer_name, scale):
     doc.Objects.AddBrep(brep_doc, doc_attr)
 
 
-def beam_brep(x1, y1, x2, y2, width, depth, z_top):
+def beam_brep(x1, y1, z1, x2, y2, z2, width, depth):
     dx = x2 - x1
     dy = y2 - y1
-    length = math.sqrt(dx * dx + dy * dy)
-    if length < 50.0 or width <= 1.0 or depth <= 1.0:
+    dz = z2 - z1
+    plan = math.sqrt(dx * dx + dy * dy)
+    length = math.sqrt(plan * plan + dz * dz)
+    if plan < 50.0 or length < 50.0 or width <= 1.0 or depth <= 1.0:
         return None
-    xdir = Rhino.Geometry.Vector3d(-dy, dx, 0.0)
-    ydir = Rhino.Geometry.Vector3d(dx, dy, 0.0)
-    if not xdir.Unitize() or not ydir.Unitize():
+    side = Rhino.Geometry.Vector3d(-dy, dx, 0.0)
+    axis = Rhino.Geometry.Vector3d(dx, dy, dz)
+    if not side.Unitize() or not axis.Unitize():
         return None
-    origin = Rhino.Geometry.Point3d((x1 + x2) / 2.0, (y1 + y2) / 2.0, z_top - depth / 2.0)
-    plane = Rhino.Geometry.Plane(origin, xdir, ydir)
+    down = Rhino.Geometry.Vector3d.CrossProduct(side, axis)
+    if down.Z > 0.0:
+        down = -down
+    if not down.Unitize():
+        return None
+    origin = Rhino.Geometry.Point3d(
+        (x1 + x2) / 2.0 + down.X * depth / 2.0,
+        (y1 + y2) / 2.0 + down.Y * depth / 2.0,
+        (z1 + z2) / 2.0 + down.Z * depth / 2.0,
+    )
+    plane = Rhino.Geometry.Plane(origin, side, axis)
     box = Rhino.Geometry.Box(
         plane,
         Rhino.Geometry.Interval(-width / 2.0, width / 2.0),
@@ -93,20 +104,26 @@ def beam_brep(x1, y1, x2, y2, width, depth, z_top):
     return box.ToBrep()
 
 
-def steel_beam_brep(x1, y1, x2, y2, width, depth, z_top):
+def steel_beam_brep(x1, y1, z1, x2, y2, z2, width, depth):
     dx = x2 - x1
     dy = y2 - y1
-    length = math.sqrt(dx * dx + dy * dy)
-    if length < 50.0 or width <= 1.0 or depth <= 1.0:
+    dz = z2 - z1
+    plan = math.sqrt(dx * dx + dy * dy)
+    length = math.sqrt(plan * plan + dz * dz)
+    if plan < 50.0 or length < 50.0 or width <= 1.0 or depth <= 1.0:
         return None
     side = Rhino.Geometry.Vector3d(-dy, dx, 0.0)
-    if not side.Unitize():
+    axis = Rhino.Geometry.Vector3d(dx, dy, dz)
+    if not side.Unitize() or not axis.Unitize():
         return None
-    # 截面所在平面：原点在梁起点、顶面标高，局部 x 轴垂直于梁轴，局部 y 轴竖直向上，
-    # 因此平面法向正好等于梁轴方向，可直接沿法向拉伸。
-    plane = Rhino.Geometry.Plane(
-        Rhino.Geometry.Point3d(x1, y1, z_top), side, Rhino.Geometry.Vector3d.ZAxis
-    )
+    down = Rhino.Geometry.Vector3d.CrossProduct(side, axis)
+    if down.Z > 0.0:
+        down = -down
+    if not down.Unitize():
+        return None
+    up = -down
+    # 截面在起点顶面。局部 x 为梁宽，局部 y 朝截面上方，法向即梁轴。
+    plane = Rhino.Geometry.Plane(Rhino.Geometry.Point3d(x1, y1, z1), side, up)
     hw = width / 2.0
     tw = max(depth * 0.02, 5.0) / 2.0
     tf = min(max(depth * 0.04, 6.0), depth * 0.4)
@@ -155,6 +172,22 @@ def ring_brep(pts, z0, height):
     return extrusion.ToBrep()
 
 
+def point_z(pt, fallback):
+    if pt is not None and len(pt) >= 3:
+        return float(pt[2])
+    return fallback
+
+
+def column_top(col, story):
+    try:
+        top = float(col.get("top"))
+    except Exception:
+        return story
+    if top > 1.0:
+        return top
+    return story
+
+
 def circle_brep(cx, cy, radius, height):
     if radius <= 1.0 or height <= 1.0:
         return None
@@ -177,11 +210,13 @@ def main():
     delete_previous(doc)
 
     beam_rgb = [79, 109, 122]
+    slope_rgb = [62, 122, 92]
     steel_rgb = [146, 152, 160]
     col_rgb = [90, 94, 99]
     wall_rgb = [196, 184, 166]
     slab_rgb = [168, 196, 188]
     beam_n = 0
+    slope_n = 0
     col_n = 0
     wall_n = 0
 
@@ -193,13 +228,24 @@ def main():
         steel = beam.get("steel") is True
         z_top = story + rise
         for i in range(len(pts) - 1):
-            args = (float(pts[i][0]), float(pts[i][1]), float(pts[i + 1][0]), float(pts[i + 1][1]), width, depth, z_top)
-            brep = steel_beam_brep(*args) if steel else beam_brep(*args)
+            z1 = point_z(pts[i], z_top)
+            z2 = point_z(pts[i + 1], z_top)
+            x1 = float(pts[i][0])
+            y1 = float(pts[i][1])
+            x2 = float(pts[i + 1][0])
+            y2 = float(pts[i + 1][1])
+            brep = steel_beam_brep(x1, y1, z1, x2, y2, z2, width, depth) if steel else beam_brep(x1, y1, z1, x2, y2, z2, width, depth)
             if brep is None:
                 continue
             beam_n += 1
+            sloped = beam.get("slope") is True and (abs(z1 - z2) > 50.0 or abs(z1 - z_top) > 50.0)
             if steel:
+                if sloped:
+                    slope_n += 1
                 add_solid(doc, file3dm, brep, "StruSteelBeam_%03d" % beam_n, steel_rgb, u"结构-钢梁", scale)
+            elif sloped:
+                slope_n += 1
+                add_solid(doc, file3dm, brep, "StruSlopeBeam_%03d" % slope_n, slope_rgb, u"结构-斜梁", scale)
             else:
                 add_solid(doc, file3dm, brep, "StruBeam_%03d" % beam_n, beam_rgb, u"结构-梁", scale)
 
@@ -207,9 +253,9 @@ def main():
         brep = None
         if col.get("kind") == "circle":
             center = col.get("c") or [0, 0]
-            brep = circle_brep(float(center[0]), float(center[1]), float(col.get("r") or 0), story)
+            brep = circle_brep(float(center[0]), float(center[1]), float(col.get("r") or 0), column_top(col, story))
         else:
-            brep = ring_brep(col.get("pts") or [], 0.0, story)
+            brep = ring_brep(col.get("pts") or [], 0.0, column_top(col, story))
         if brep is None:
             continue
         col_n += 1
@@ -245,6 +291,7 @@ def main():
     write_result(result_path, {
         "ok": True,
         "beams": beam_n,
+        "slope": slope_n,
         "columns": col_n,
         "walls": wall_n,
         "slab": 1 if slab_n else 0,
