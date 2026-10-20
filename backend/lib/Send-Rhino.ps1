@@ -1,4 +1,4 @@
-function Zh {
+﻿function Zh {
   param([string]$Hex)
   $chars = New-Object System.Collections.Generic.List[char]
   for ($i = 0; $i -lt $Hex.Length; $i += 4) {
