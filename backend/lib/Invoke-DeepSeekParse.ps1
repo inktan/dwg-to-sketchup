@@ -186,10 +186,78 @@ function Get-PointPathLength {
   return $len
 }
 
+# --- 配对平行双线，取矩形梁的中心线作为定位线 ---
+# CAD 里矩形梁经常用两根平行的 line/polyline 画出边缘轮廓，而不是 mline。
+# 这时候 DeepSeek 选的是其中一根边缘线，SketchUp/Rhino 会把它当成定位线，
+# 结果梁偏到一边。Resolve-BeamCenterline 在同 layer 里找平行配对线，
+# 计算中心线作为定位线。全部用标量运算，避开 PowerShell 5.1 的数组展平坑。
+
+function Resolve-BeamCenterline {
+  # 给定一根被选中的 beam line，在同 layer 里找平行配对线。
+  # 找到后返回 @{ pts = List[object]; width = double }；否则返回 $null。
+  param($Local, $Index, [string]$SelectedId)
+  if ($Local.type -ne "line" -and ($Local.type -ne "polyline" -or $Local.closed)) { return $null }
+  $pts = $Local.pts
+  if ($null -eq $pts -or $pts.Count -lt 2) { return $null }
+  # 取端点坐标为单独的标量，彻底避开 PS 数组展平
+  $a0x = [double]$pts[0][0]; $a0y = [double]$pts[0][1]
+  $a1x = [double]$pts[1][0]; $a1y = [double]$pts[1][1]
+  $s0 = $a1x - $a0x; $s1 = $a1y - $a0y
+  $sLen = [math]::Sqrt($s0 * $s0 + $s1 * $s1)
+  if ($sLen -lt 1) { return $null }
+  $s0 = $s0 / $sLen; $s1 = $s1 / $sLen
+  foreach ($key in $Index.Keys) {
+    if ($key -eq $SelectedId) { continue }
+    $other = $Index[$key]
+    if ($other.layer -ne $Local.layer) { continue }
+    if ($other.type -ne "line" -and ($other.type -ne "polyline" -or $other.closed)) { continue }
+    $opts = $other.pts
+    if ($null -eq $opts -or $opts.Count -lt 2) { continue }
+    $b0x = [double]$opts[0][0]; $b0y = [double]$opts[0][1]
+    $b1x = [double]$opts[1][0]; $b1y = [double]$opts[1][1]
+    $t0 = $b1x - $b0x; $t1 = $b1y - $b0y
+    $tLen = [math]::Sqrt($t0 * $t0 + $t1 * $t1)
+    if ($tLen -lt 1) { continue }
+    $t0 = $t0 / $tLen; $t1 = $t1 / $tLen
+    $cos = [math]::Abs($s0 * $t0 + $s1 * $t1)
+    if ($cos -lt 0.99) { continue }
+    # B0 到 A 直线的距离（叉积）
+    $wx = $b0x - $a0x; $wy = $b0y - $a0y
+    $dist = [math]::Abs($s0 * $wy - $s1 * $wx)
+    if ($dist -lt 80 -or $dist -gt 1010) { continue }
+    # 投影重叠
+    $pa0 = $a0x * $s0 + $a0y * $s1
+    $pa1 = $a1x * $s0 + $a1y * $s1
+    $pb0 = $b0x * $s0 + $b0y * $s1
+    $pb1 = $b1x * $s0 + $b1y * $s1
+    $aLo = [math]::Min($pa0, $pa1); $aHi = [math]::Max($pa0, $pa1)
+    $bLo = [math]::Min($pb0, $pb1); $bHi = [math]::Max($pb0, $pb1)
+    $overlap = [math]::Min($aHi, $bHi) - [math]::Max($aLo, $bLo)
+    if ($overlap -lt 50) { continue }
+    # 找到配对线，计算中心线
+    $amx = ($a0x + $a1x) / 2; $amy = ($a0y + $a1y) / 2
+    $bmx = ($b0x + $b1x) / 2; $bmy = ($b0y + $b1y) / 2
+    $midLenX = $bmx - $amx; $midLenY = $bmy - $amy
+    $midLen = [math]::Sqrt($midLenX * $midLenX + $midLenY * $midLenY)
+    $nx = -$s1; $ny = $s0
+    $sideSign = [math]::Sign($midLenX * $nx + $midLenY * $ny)
+    if ($sideSign -eq 0) { $sideSign = 1 }
+    $off = $midLen / 2 * $sideSign
+    $c0x = $a0x + $nx * $off; $c0y = $a0y + $ny * $off
+    $c1x = $a1x + $nx * $off; $c1y = $a1y + $ny * $off
+    $centerPts = New-Object System.Collections.Generic.List[object]
+    $centerPts.Add(@([math]::Round($c0x, 1), [math]::Round($c0y, 1))) | Out-Null
+    $centerPts.Add(@([math]::Round($c1x, 1), [math]::Round($c1y, 1))) | Out-Null
+    return @{ pts = $centerPts; width = [math]::Round($dist, 1) }
+  }
+  return $null
+}
+
+
 function Get-StructureRuleText {
   @'
 默认结构规则（先判断整张图是否符合这些预定规则。图层名不区分大小写。符合时按规则归类。整张图的图层、图块和标注都对不上这些规则时，不要套用图层名，改为按结构设计是否合理自行判断）：
-- 梁图层：s数字-beam，或 s数字-beam-hddn；图层名里含 gl 或 GL（不区分大小写，例如 s1-beam-gl、GL-1）的线状图元也算梁，而且这条梁是钢梁。图元是 mline、line，或 polyline。平行双线方向点积绝对值不小于 0.99、重叠不少于 50 mm、间距 80 到 1010 mm 时，较短线向另一条偏移一半间距得到梁中线，间距就是梁宽。梁高取中线附近 2500 mm 内的尺寸文字，格式为 N x N、N*N 或 N×N；对不上时梁高用 500。梁尺寸文字图层：以 dsptext_beam 结尾、以 dsptext_wallbeam 结尾、G-ANNO-NPLT、尺寸标注数字-梁。
+- 梁图层：s数字-beam，或 s数字-beam-hddn；图层名里含 gl 或 GL（不区分大小写，例如 s1-beam-gl、GL-1）的线状图元也算梁，而且这条梁是钢梁。图元是 mline、line，或 polyline。矩形梁的定位线必须是梁的中心线，不要取梁的边缘线。当一根矩形梁由两根平行的线状图元（两条 line、两条开 polyline，或 mline 的两根边缘）定位时——方向点积绝对值不小于 0.99、投影重叠不少于 50 mm、间距 80 到 1010 mm——这两根线是同一根梁的两侧边缘，梁的定位线在它们正中间，梁宽等于它们的间距。id 只能选其中一根线（任选），但务必把两根线的间距填进 width 字段；SketchUp 和 Rhino 建模时会自动取中线。mline 自己就是居中的，直接选它即可。梁高取中心线附近 2500 mm 内的尺寸文字，格式为 N x N、N*N 或 N×N；对不上时梁高用 500。梁尺寸文字图层：以 dsptext_beam 结尾、以 dsptext_wallbeam 结尾、G-ANNO-NPLT、尺寸标注数字-梁。
 - 钢梁尺寸文字：由四个数字组成的型钢规格字符串，例如 400x200x8x13、HN400*200*8*13、400×200×8×13。它同样是梁的截面尺寸，不要当成标注、轴号或其它图元。第 1 个数字是截面高（depth），第 2 个是截面宽（width），后面两个是腹板厚和翼缘厚，不用管。这种文字出现在哪条梁中线附近，那条梁就是钢梁。
 - 柱图层：a数字-cols 或 s数字-cols，数字可以没有，例如 S-COLS。闭合 polyline 面积在 10000 到 10000000 之间，以及圆。不要把轴号小圆当成柱。
 - 墙图层：a数字-wall 或 s数字-wall。平行双线间距 80 到 1000 mm、重叠不少于 50 mm。墙厚通常小于 450，长度通常大于 1500。不要把整层外轮廓或轴线当成墙。
@@ -336,33 +404,46 @@ function Convert-StructurePlan {
     $used[$id] = $true
 
     if ($sel.Role -eq "beam") {
-      if ($beams.Count -ge 500) { continue }
-      if ($local.type -eq "circle") { continue }
-      if ($local.type -eq "polyline" -and $local.closed) { continue }
-      $pts = Copy-PointList $local.pts
-      if ($null -eq $pts -or $pts.Count -lt 2) { continue }
-      $width = Convert-ToDouble (Get-PlanProp $sel.Raw @("width", "w")) 0
-      if ($width -le 0 -and $local.scale) { $width = [math]::Abs([double]$local.scale) }
-      if ($width -lt 80 -or $width -gt 1500) { $width = 200 }
-      $depth = Convert-ToDouble (Get-PlanProp $sel.Raw @("depth", "h", "height")) 500
-      if ($depth -lt 150 -or $depth -gt 2500) { $depth = 500 }
-      $rise = Convert-ToDouble (Get-PlanProp $sel.Raw @("rise")) 0
-      if ($rise -lt -2000 -or $rise -gt 5000) { $rise = 0 }
-      $steel = $false
-      if ($local.layer -and ([string]$local.layer -match 'gl')) { $steel = $true }
-      $steelRaw = Get-PlanProp $sel.Raw @("steel", "isSteel", "is_steel")
-      if ($null -ne $steelRaw) {
-        if ($steelRaw -eq $true) { $steel = $true }
-        elseif (([string]$steelRaw).Trim().ToLowerInvariant() -eq 'true' -or ([string]$steelRaw).Trim() -eq '1') { $steel = $true }
-      }
-      $len = [math]::Round((Get-PointPathLength $pts), 1)
-      $beams.Add(@{ pts = $pts; w = [math]::Round($width, 1); h = [math]::Round($depth, 1); rise = [math]::Round($rise, 1); len = $len; steel = $steel }) | Out-Null
-      for ($pi = 0; $pi -lt $pts.Count; $pi++) {
-        $p = $pts[$pi]
-        if ([double]$p[0] -lt $minX) { $minX = [double]$p[0] }
-        if ([double]$p[1] -lt $minY) { $minY = [double]$p[1] }
-        if ([double]$p[0] -gt $maxX) { $maxX = [double]$p[0] }
-        if ([double]$p[1] -gt $maxY) { $maxY = [double]$p[1] }
+      try {
+        if ($beams.Count -ge 500) { continue }
+        if ($local.type -eq "circle") { continue }
+        if ($local.type -eq "polyline" -and $local.closed) { continue }
+        $pts = Copy-PointList $local.pts
+        if ($null -eq $pts -or $pts.Count -lt 2) { continue }
+        # 矩形梁经常用两根平行的 line/polyline 画出边缘轮廓，选到的只是其中一根。
+        # 在这里尝试找配对线，取中心线作为定位线，间距作为梁宽。
+        $centerline = Resolve-BeamCenterline -Local $local -Index $Index -SelectedId $id
+        if ($null -ne $centerline) {
+          $pts = Copy-PointList $centerline.pts
+        }
+        $width = Convert-ToDouble (Get-PlanProp $sel.Raw @("width", "w")) 0
+        if ($width -le 0 -and $local.scale) { $width = [math]::Abs([double]$local.scale) }
+        if ($width -le 0 -and $null -ne $centerline) { $width = [double]$centerline.width }
+        if ($width -lt 80 -or $width -gt 1500) { $width = 200 }
+        $depth = Convert-ToDouble (Get-PlanProp $sel.Raw @("depth", "h", "height")) 500
+        if ($depth -lt 150 -or $depth -gt 2500) { $depth = 500 }
+        $rise = Convert-ToDouble (Get-PlanProp $sel.Raw @("rise")) 0
+        if ($rise -lt -2000 -or $rise -gt 5000) { $rise = 0 }
+        $steel = $false
+        if ($local.layer -and ([string]$local.layer -match 'gl')) { $steel = $true }
+        $steelRaw = Get-PlanProp $sel.Raw @("steel", "isSteel", "is_steel")
+        if ($null -ne $steelRaw) {
+          if ($steelRaw -eq $true) { $steel = $true }
+          elseif (([string]$steelRaw).Trim().ToLowerInvariant() -eq 'true' -or ([string]$steelRaw).Trim() -eq '1') { $steel = $true }
+        }
+        $len = [math]::Round((Get-PointPathLength $pts), 1)
+        $beams.Add(@{ pts = $pts; w = [math]::Round($width, 1); h = [math]::Round($depth, 1); rise = [math]::Round($rise, 1); len = $len; steel = $steel }) | Out-Null
+        for ($pi = 0; $pi -lt $pts.Count; $pi++) {
+          $p = $pts[$pi]
+          if ([double]$p[0] -lt $minX) { $minX = [double]$p[0] }
+          if ([double]$p[1] -lt $minY) { $minY = [double]$p[1] }
+          if ([double]$p[0] -gt $maxX) { $maxX = [double]$p[0] }
+          if ([double]$p[1] -gt $maxY) { $maxY = [double]$p[1] }
+        }
+      } catch {
+        Write-Host ((Get-BuildTag) + " beam processing error for id=" + $id + ": " + $_.Exception.Message)
+        Write-Host ((Get-BuildTag) + " stack: " + $_.ScriptStackTrace)
+        continue
       }
     } elseif ($sel.Role -eq "column" -and $local.type -eq "circle") {
       if ($columns.Count -ge 300) { continue }
