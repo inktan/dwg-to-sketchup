@@ -589,6 +589,12 @@ function Test-TextParallel {
   return ($d -le (15 * [math]::PI / 180))
 }
 
+function Test-RidgeLayer {
+  param([string]$Layer)
+  if ([string]::IsNullOrWhiteSpace($Layer)) { return $false }
+  return ($Layer.IndexOf("屋脊线") -ge 0)
+}
+
 function Get-OpenSegments {
   param($Index)
   $segs = New-Object System.Collections.Generic.List[object]
@@ -602,6 +608,8 @@ function Get-OpenSegments {
     if ($closed) { continue }
     $pts = $local.pts
     if ($null -eq $pts -or [int]$pts.Count -lt 2) { continue }
+    $layer = ""
+    try { $layer = [string]$local.layer } catch {}
     for ($i = 0; $i -lt ([int]$pts.Count - 1); $i++) {
       $x1 = [double]$pts[$i][0]
       $y1 = [double]$pts[$i][1]
@@ -610,7 +618,7 @@ function Get-OpenSegments {
       $dx = $x2 - $x1
       $dy = $y2 - $y1
       if (($dx * $dx + $dy * $dy) -lt 40000) { continue }
-      $segs.Add([pscustomobject]@{ id = [string]$id; x1 = $x1; y1 = $y1; x2 = $x2; y2 = $y2 }) | Out-Null
+      $segs.Add([pscustomobject]@{ id = [string]$id; layer = $layer; x1 = $x1; y1 = $y1; x2 = $x2; y2 = $y2 }) | Out-Null
     }
   }
   return ,$segs
@@ -635,6 +643,7 @@ function Get-RidgeLines {
     $bestId = $null
     $bestD = 2500.0
     foreach ($seg in $segs) {
+      if (-not (Test-RidgeLayer ([string]$seg.layer))) { continue }
       if (-not (Test-TextParallel $rot $seg.x1 $seg.y1 $seg.x2 $seg.y2)) { continue }
       $d = Get-DistPointSeg $tx $ty $seg.x1 $seg.y1 $seg.x2 $seg.y2
       if ($d -lt $bestD) {
@@ -1047,7 +1056,7 @@ storyMm 和 slabThickMm 采用用户给出的默认值，除非文字明确只�
 - 第一步与屋脊线无关：把所有梁中心定位线放进 beams。带 axis:center 的选这个中心线 id；没有 axis 的线按自身坐标。间距小于 190 mm 的平行线各选各的 id。
 - 只认带「屋脊」的文字，例如 15.850(屋脊)。15.850 按米是 15850 mm，也就是 15.85 m，是绝对标高，不要加到层高上。文字本身不是梁，不要选成梁、柱或截面。
 - 斜梁低点只认带「屋檐」的文字，例如 12.600(屋檐)。12.600 按米是 12600 mm。这种文字不是梁，不要选。没有屋檐文字时，程序把斜梁低点设为 0，不用用户给出的层高。
-- 屋脊线是该文字 2500 mm 内、与文字方向平行、距离最近的那条线。沿这根屋脊线的梁中心线是屋脊梁，必须放进 beams。程序把屋脊梁的梁顶设成这个屋脊标高。你不要改定位线，也不要输出高度。
+- 屋脊线的几何只看图层名。图层名含「屋脊线」的直线、开口多段线或多线才是屋脊线，不要把这些线选成梁。文字 15.850(屋脊) 只提供高度：它 2500 mm 内、与文字方向平行、距离最近的那条屋脊线图层的线，用这个标高。沿这根屋脊线的梁中心线是屋脊梁，必须放进 beams。程序把屋脊梁的梁顶设成这个屋脊标高。你不要改定位线，也不要输出高度。
 - 第二步由程序做：梁中心线与屋脊线相交时，在交点分成两段。交点高度用屋脊标高，另一端高度用离该端最近的屋檐标高；没有屋檐文字时为 0。
 - 若梁中心线与屋脊线不相交，程序把中心线两侧向外各延长不超过 300 mm。延长后有交点时，新定位线是交点到较远的那个原端点。交点用屋脊标高，另一端用屋檐标高；没有屋檐文字时为 0。
 - 这些梁在 JSON 里仍然只输出原来的那一个中心线 id，放进 beams。不要拆成两个 id，不要输出 slopeBeams，不要输出高度或 verts。
@@ -1072,7 +1081,7 @@ function New-DeepSeekBody {
 - 两根平行线间距小于 190 mm 时，一定是两根不同的梁，必须各选各的 id，禁止合并或取中线。
 
 图纸符合规则时按规则归类。图纸整体不符合预定规则时，不要硬套图层名，要自行判断哪些图元是梁、柱、墙、楼板，并思考这样的结构布置是否合理。id 仍然只能来自清单。
-看到 15.850(屋脊) 时：它旁边最近的平行线是屋脊线。沿屋脊线的梁是屋脊梁，要放进 beams，程序把它的梁顶设成 15.85 m。看到 12.600(屋檐) 时，它是斜梁低点标高，不是梁。没有屋檐文字时斜梁低点为 0，不要用层高代替。第一步先把全部梁中心线放进 beams。第二步的相交、分成两段、两侧延长 300 mm、斜梁端点和屋脊梁梁顶都由程序计算。不要输出 slopeBeams，不要编造标高。
+图层名含「屋脊线」的线才是屋脊线，不要选成梁。15.850(屋脊) 只给这根屋脊线定高度。沿屋脊线的梁是屋脊梁，要放进 beams，程序把它的梁顶设成这个标高。看到 12.600(屋檐) 时，它是斜梁低点标高，不是梁。没有屋檐文字时斜梁低点为 0，不要用层高代替。第一步先把全部梁中心线放进 beams。第二步的相交、分成两段、两侧延长 300 mm、斜梁端点和屋脊梁梁顶都由程序计算。不要输出 slopeBeams，不要编造标高。
 只输出一个 JSON 对象，不要 Markdown，不要解释。格式：
 {"summary":"一两句中文，说明依据","storyMm":3000,"slabThickMm":130,"beams":[{"id":"m1","width":200,"depth":500,"rise":0,"steel":false}],"columns":[{"id":"p1"}],"walls":[{"id":"p2"}],"slabRect":[0,0,1000,1000]}
 $rules
@@ -1081,7 +1090,7 @@ $rules
 请按下面步骤分析，并只输出一个 JSON：
 1. 判断整张图是否符合预定图层规则。
 2. 挑选全部梁中心定位线，这一步与屋脊线无关：优先选 axis 为 center 的图元；没有 axis 的线按它自己的坐标作为定位线；间距小于 190 mm 的平行线各选各的 id，不要合并。
-3. 再挑选柱、墙、楼板。15.850(屋脊) 旁边最近的平行线是屋脊线。沿屋脊线的梁中心线是屋脊梁，放进 beams。12.600(屋檐) 只是斜梁低点标高，不要选成梁。会和屋脊线相交、或两侧向外延长不超过 300 mm 后相交的梁，也只把原来的中心线 id 放进 beams。不要输出高度，不要输出 slopeBeams。
+3. 再挑选柱、墙、楼板。图层名含「屋脊线」的线不是梁，不要选。15.850(屋脊) 只给屋脊线定高度。沿屋脊线的梁中心线是屋脊梁，放进 beams。12.600(屋檐) 只是斜梁低点标高，不要选成梁。会和屋脊线相交、或两侧向外延长不超过 300 mm 后相交的梁，也只把原来的中心线 id 放进 beams。不要输出高度，不要输出 slopeBeams。
 4. summary 用一两句中文说明依据。
 
 用户指定的默认层高是 $Story mm，默认板厚是 $SlabThick mm。层高用于水平梁、柱、墙和楼板，不用于斜梁低点。斜梁低点用图纸上的 12.600(屋檐)；没有屋檐文字时低点为 0。交点和屋脊梁的梁顶用 15.850(屋脊)，15.850 就是 15.85 m。你不要在 JSON 里写这些高度。
@@ -1389,7 +1398,7 @@ function Invoke-DeepSeekStructure {
   try {
   foreach ($think in @($true, $false)) {
     $step = "DeepSeek 分析"
-    $detail = "已提交 $entityCount 个图元、$layerCount 个图层和默认结构规则，约 $wan 万字。模型只选梁中心线 id 和截面，不改定位线，也不输出斜梁高度。有 15.850(屋脊) 时，相交分段和两侧延长 300 mm 由程序计算。斜梁低点用 12.600(屋檐)，没有则用 0。这一步通常要几分钟。"
+    $detail = "已提交 $entityCount 个图元、$layerCount 个图层和默认结构规则，约 $wan 万字。模型只选梁中心线 id 和截面，不改定位线，也不输出斜梁高度。图层名含屋脊线的线才是屋脊线，15.850(屋脊) 只定高度。斜梁低点用 12.600(屋檐)，没有则用 0。这一步通常要几分钟。"
     if (-not $think) {
       $step = "DeepSeek 重试"
       $detail = "第一次没有返回完整 JSON。正在关闭思考模式，把同一份图元和默认规则再分析一次。"
